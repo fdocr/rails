@@ -267,6 +267,7 @@ module ActionController # :nodoc:
       def verify_authenticity_token # :doc:
         mark_for_same_origin_verification!
 
+        byebug
         if !verified_request?
           logger.warn unverified_request_warning_message if logger && log_warning_on_csrf_failure
 
