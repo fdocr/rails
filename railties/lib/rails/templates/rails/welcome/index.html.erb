@@ -2,7 +2,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Ruby on Rails</title>
+  <title>Ruby on Rails <%= Rails.version %></title>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width">
   <link rel="icon" href="<%= ruby_on_rails_logo_favicon_data_uri %>" />
@@ -50,6 +50,8 @@
       border-radius: 100%;
       display: flex;
       transition: background 0.25s cubic-bezier(0.33, 1, 0.68, 1);
+      filter: drop-shadow(0 20px 13px rgb(0 0 0 / 0.03)) drop-shadow(0 8px 5px rgb(0 0 0 / 0.08));
+      overflow: hidden;
     }
 
     nav a:hover {
@@ -60,6 +62,7 @@
       height: auto;
       max-width: 100%;
       width: 100%;
+      cursor: pointer;
     }
 
     ul {

@@ -5,11 +5,13 @@ require "action_controller/log_subscriber"
 require "action_controller/metal/params_wrapper"
 
 module ActionController
+  # = Action Controller \Base
+  #
   # Action Controllers are the core of a web request in \Rails. They are made up of one or more actions that are executed
   # on request and then either it renders a template or redirects to another action. An action is defined as a public method
   # on the controller, which will automatically be made accessible to the web-server through \Rails Routes.
   #
-  # By default, only the ApplicationController in a \Rails application inherits from <tt>ActionController::Base</tt>. All other
+  # By default, only the ApplicationController in a \Rails application inherits from +ActionController::Base+. All other
   # controllers inherit from ApplicationController. This gives you one class to configure things such as
   # request forgery protection and filtering of sensitive request parameters.
   #
@@ -87,10 +89,11 @@ module ActionController
   #
   # or you can remove the entire session with +reset_session+.
   #
-  # Sessions are stored by default in a browser cookie that's cryptographically signed, but unencrypted.
-  # This prevents the user from tampering with the session but also allows them to see its contents.
-  #
-  # Do not put secret information in cookie-based sessions!
+  # By default, sessions are stored in an encrypted browser cookie (see
+  # ActionDispatch::Session::CookieStore). Thus the user will not be able to
+  # read or edit the session data. However, the user can keep a copy of the
+  # cookie even after it has expired, so you should avoid storing sensitive
+  # information in cookie-based sessions.
   #
   # == Responses
   #
@@ -165,22 +168,6 @@ module ActionController
   #
   class Base < Metal
     abstract!
-
-    # We document the request and response methods here because albeit they are
-    # implemented in ActionController::Metal, the type of the returned objects
-    # is unknown at that level.
-
-    ##
-    # :method: request
-    #
-    # Returns an ActionDispatch::Request instance that represents the
-    # current request.
-
-    ##
-    # :method: response
-    #
-    # Returns an ActionDispatch::Response that represents the current
-    # response.
 
     # Shortcut helper that returns all the modules included in
     # ActionController::Base except the ones passed as arguments:

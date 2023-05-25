@@ -30,6 +30,10 @@ require "models/categorization"
 require "models/sponsor"
 require "models/mentor"
 require "models/contract"
+require "models/pirate"
+require "models/matey"
+require "models/parrot"
+require "models/sharded"
 
 class EagerLoadingTooManyIdsTest < ActiveRecord::TestCase
   fixtures :citations
@@ -47,7 +51,9 @@ class EagerAssociationTest < ActiveRecord::TestCase
   fixtures :posts, :comments, :authors, :essays, :author_addresses, :categories, :categories_posts,
             :companies, :accounts, :tags, :taggings, :ratings, :people, :readers, :categorizations,
             :owners, :pets, :author_favorites, :jobs, :references, :subscribers, :subscriptions, :books,
-            :developers, :projects, :developers_projects, :members, :memberships, :clubs, :sponsors
+            :developers, :projects, :developers_projects, :members, :memberships, :clubs, :sponsors,
+            :pirates, :mateys, :sharded_blogs, :sharded_blog_posts, :sharded_comments, :sharded_blog_posts_tags,
+            :sharded_tags
 
   def test_eager_with_has_one_through_join_model_with_conditions_on_the_through
     member = Member.all.merge!(includes: :favorite_club).find(members(:some_other_guy).id)
@@ -197,6 +203,27 @@ class EagerAssociationTest < ActiveRecord::TestCase
     authors = Author.includes(:post).references(:post).to_a
     assert authors.count > 0
     assert_no_queries { authors.map(&:post) }
+  end
+
+  def test_eager_loaded_has_one_association_without_primary_key
+    pirate = pirates(:redbeard)
+    attacker_matey = pirate.attacker_matey
+    eager_loaded = Pirate.eager_load(:attacker_matey).where(id: pirate).first
+
+    assert_no_queries do
+      assert_equal attacker_matey.attributes, eager_loaded.attacker_matey.attributes
+    end
+  end
+
+  def test_eager_loaded_has_many_association_without_primary_key
+    pirate = pirates(:blackbeard)
+    mateys = pirate.mateys.to_a
+    eager_loaded = Pirate.eager_load(:mateys).where(id: pirate).first
+
+    assert_not_empty mateys
+    assert_no_queries do
+      assert_equal mateys.map(&:attributes), eager_loaded.mateys.map(&:attributes)
+    end
   end
 
   def test_type_cast_in_where_references_association_name
@@ -852,7 +879,11 @@ class EagerAssociationTest < ActiveRecord::TestCase
     error = assert_raise(ActiveRecord::AssociationNotFoundError) {
       Post.all.merge!(includes: :taggingz).find(6)
     }
-    assert_match "Did you mean?  tagging\n", error.message
+    if error.respond_to?(:detailed_message)
+      assert_match "Did you mean?  tagging", error.detailed_message
+    else
+      assert_match "Did you mean?  tagging\n", error.message
+    end
   end
 
   def test_eager_has_many_through_with_order
@@ -1644,6 +1675,42 @@ class EagerAssociationTest < ActiveRecord::TestCase
     assert_raises(ActiveRecord::AssociationNotFoundError) do
       Sponsor.where(sponsorable_id: 1).preload(sponsorable: [{ post: :fist_comment }, :membership]).to_a
     end
+  end
+
+  test "preloading belongs_to association associated by a composite query_constraints" do
+    blog_ids = [sharded_blogs(:sharded_blog_one).id, sharded_blogs(:sharded_blog_two).id]
+    posts = Sharded::BlogPost.where(blog_id: blog_ids).includes(:comments).to_a
+    assert posts.all? { |post| post.comments.loaded? }
+
+    post = posts.find { |post| post.id == sharded_blog_posts(:great_post_blog_one).id }
+    expected_comments = Sharded::Comment.where(blog_id: post.blog_id, blog_post_id: post.id).to_a
+    assert_equal(post.comments.sort, expected_comments.sort)
+  end
+
+  test "preloading has_many association associated by a composite query_constraints" do
+    blog_ids = [sharded_blogs(:sharded_blog_one).id, sharded_blogs(:sharded_blog_two).id]
+    comments = Sharded::Comment.where(blog_id: blog_ids).includes(:blog_post).to_a
+    assert comments.all? { |comment| comment.association(:blog_post).loaded? }
+
+    comment = comments.find { |comment| comment.id == sharded_comments(:great_comment_blog_post_one).id }
+    assert_equal(comment.blog_post, sharded_blog_posts(:great_post_blog_one))
+  end
+
+  test "preloading has_many through association associated by a composite query_constraints" do
+    blog_ids = [sharded_blogs(:sharded_blog_one).id, sharded_blogs(:sharded_blog_two).id]
+    blog_posts = Sharded::BlogPost.where(blog_id: blog_ids).includes(:tags).to_a
+    assert blog_posts.all? { |post| post.association(:tags).loaded? }
+
+    expected_blog_post = sharded_blog_posts(:great_post_blog_one)
+    expected_tag_ids = Sharded::BlogPostTag
+      .where(blog_id: expected_blog_post.blog_id, blog_post_id: expected_blog_post.id)
+      .pluck(:tag_id)
+
+    assert_not_empty(expected_tag_ids)
+
+    blog_post = blog_posts.find { |post| post.id == expected_blog_post.id }
+
+    assert_equal(expected_tag_ids.sort, blog_post.tags.map(&:id).sort)
   end
 
   private

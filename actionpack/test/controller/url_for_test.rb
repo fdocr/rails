@@ -8,7 +8,7 @@ module AbstractController
       class W
         include ActionDispatch::Routing::RouteSet.new.tap { |r|
           r.draw {
-            ActiveSupport::Deprecation.silence {
+            ActionDispatch.deprecator.silence {
               get ":controller(/:action(/:id(.:format)))"
             }
           }
@@ -180,13 +180,6 @@ module AbstractController
         )
       end
 
-      def test_protocol
-        add_host!
-        assert_equal("https://www.basecamphq.com/c/a/i",
-          W.new.url_for(controller: "c", action: "a", id: "i", protocol: "https")
-        )
-      end
-
       def test_protocol_with_and_without_separators
         add_host!
         assert_equal("https://www.basecamphq.com/c/a/i",
@@ -268,7 +261,7 @@ module AbstractController
         w = Class.new {
           config = ActionDispatch::Routing::RouteSet::Config.new "/subdir"
           r = ActionDispatch::Routing::RouteSet.new(config)
-          r.draw { ActiveSupport::Deprecation.silence { get ":controller(/:action(/:id(.:format)))" } }
+          r.draw { ActionDispatch.deprecator.silence { get ":controller(/:action(/:id(.:format)))" } }
           include r.url_helpers
         }
         add_host!(w)
@@ -324,7 +317,7 @@ module AbstractController
           set.draw do
             get "home/sweet/home/:user", to: "home#index", as: :home
 
-            ActiveSupport::Deprecation.silence do
+            ActionDispatch.deprecator.silence do
               get ":controller/:action/:id"
             end
           end

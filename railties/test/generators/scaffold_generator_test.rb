@@ -1,9 +1,11 @@
 # frozen_string_literal: true
 
+require "plugin_helpers"
 require "generators/generators_test_helper"
 require "rails/generators/rails/scaffold/scaffold_generator"
 
 class ScaffoldGeneratorTest < Rails::Generators::TestCase
+  include PluginHelpers
   include GeneratorsTestHelper
   arguments %w(product_line title:string approved:boolean product:belongs_to user:references)
 
@@ -51,7 +53,7 @@ class ScaffoldGeneratorTest < Rails::Generators::TestCase
       end
 
       assert_instance_method :destroy, content do |m|
-        assert_match(/@product_line\.destroy/, m)
+        assert_match(/@product_line\.destroy!/, m)
       end
 
       assert_instance_method :set_product_line, content do |m|
@@ -137,7 +139,7 @@ class ScaffoldGeneratorTest < Rails::Generators::TestCase
       end
 
       assert_instance_method :destroy, content do |m|
-        assert_match(/@product_line\.destroy/, m)
+        assert_match(/@product_line\.destroy!/, m)
       end
     end
 
@@ -254,7 +256,7 @@ class ScaffoldGeneratorTest < Rails::Generators::TestCase
       end
 
       assert_instance_method :destroy, content do |m|
-        assert_match(/@admin_role\.destroy/, m)
+        assert_match(/@admin_role\.destroy!/, m)
       end
 
       assert_instance_method :set_admin_role, content do |m|
@@ -361,8 +363,9 @@ class ScaffoldGeneratorTest < Rails::Generators::TestCase
     route_path = File.expand_path("config/routes.rb", destination_root)
     content = File.read(route_path)
 
-    # Remove all of the comments and blank lines from the routes file
+    # Remove all of the comments, blank lines, and default health controller from the routes file
     content.gsub!(/^  \#.*\n/, "")
+    content.gsub!(/^  get "up".*\n/, "")
     content.gsub!(/^\n/, "")
 
     File.write(route_path, content)
@@ -564,25 +567,21 @@ class ScaffoldGeneratorTest < Rails::Generators::TestCase
   end
 
   def test_scaffold_tests_pass_by_default_inside_mountable_engine
-    Dir.chdir(destination_root) { `bundle exec rails plugin new bukkits --mountable` }
-
     engine_path = File.join(destination_root, "bukkits")
 
-    Dir.chdir(engine_path) do
+    with_new_plugin(engine_path, "--mountable") do
       quietly do
         `bin/rails g scaffold User name:string age:integer;
         bin/rails db:migrate`
       end
-      assert_match(/8 runs, 10 assertions, 0 failures, 0 errors/, `bin/rails test 2>&1`)
+      assert_match(/8 runs, 12 assertions, 0 failures, 0 errors/, `bin/rails test 2>&1`)
     end
   end
 
   def test_scaffold_tests_pass_by_default_inside_namespaced_mountable_engine
-    Dir.chdir(destination_root) { `bundle exec rails plugin new bukkits-admin --mountable` }
-
     engine_path = File.join(destination_root, "bukkits-admin")
 
-    Dir.chdir(engine_path) do
+    with_new_plugin(engine_path, "--mountable") do
       quietly do
         `bin/rails g scaffold User name:string age:integer;
         bin/rails db:migrate`
@@ -593,49 +592,43 @@ class ScaffoldGeneratorTest < Rails::Generators::TestCase
         assert_match(/class UsersController < ApplicationController/, content)
       end
 
-      assert_match(/8 runs, 10 assertions, 0 failures, 0 errors/, `bin/rails test 2>&1`)
+      assert_match(/8 runs, 12 assertions, 0 failures, 0 errors/, `bin/rails test 2>&1`)
     end
   end
 
   def test_scaffold_tests_pass_by_default_inside_full_engine
-    Dir.chdir(destination_root) { `bundle exec rails plugin new bukkits --full` }
-
     engine_path = File.join(destination_root, "bukkits")
 
-    Dir.chdir(engine_path) do
+    with_new_plugin(engine_path, "--full") do
       quietly do
         `bin/rails g scaffold User name:string age:integer;
         bin/rails db:migrate`
       end
-      assert_match(/8 runs, 10 assertions, 0 failures, 0 errors/, `bin/rails test 2>&1`)
+      assert_match(/8 runs, 12 assertions, 0 failures, 0 errors/, `bin/rails test 2>&1`)
     end
   end
 
   def test_scaffold_tests_pass_by_default_inside_api_mountable_engine
-    Dir.chdir(destination_root) { `bundle exec rails plugin new bukkits --mountable --api` }
-
     engine_path = File.join(destination_root, "bukkits")
 
-    Dir.chdir(engine_path) do
+    with_new_plugin(engine_path, "--mountable", "--api") do
       quietly do
         `bin/rails g scaffold User name:string age:integer;
         bin/rails db:migrate`
       end
-      assert_match(/6 runs, 8 assertions, 0 failures, 0 errors/, `bin/rails test 2>&1`)
+      assert_match(/6 runs, 10 assertions, 0 failures, 0 errors/, `bin/rails test 2>&1`)
     end
   end
 
   def test_scaffold_tests_pass_by_default_inside_api_full_engine
-    Dir.chdir(destination_root) { `bundle exec rails plugin new bukkits --full --api` }
-
     engine_path = File.join(destination_root, "bukkits")
 
-    Dir.chdir(engine_path) do
+    with_new_plugin(engine_path, "--full", "--api") do
       quietly do
         `bin/rails g scaffold User name:string age:integer;
         bin/rails db:migrate`
       end
-      assert_match(/6 runs, 8 assertions, 0 failures, 0 errors/, `bin/rails test 2>&1`)
+      assert_match(/6 runs, 10 assertions, 0 failures, 0 errors/, `bin/rails test 2>&1`)
     end
   end
 

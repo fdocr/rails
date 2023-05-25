@@ -2,14 +2,14 @@
 
 module ActiveRecord
   module Locking
-    # == What is Optimistic Locking
+    # == What is \Optimistic \Locking
     #
     # Optimistic locking allows multiple users to access the same record for edits, and assumes a minimum of
     # conflicts with the data. It does this by checking whether another process has made changes to a record since
-    # it was opened, an <tt>ActiveRecord::StaleObjectError</tt> exception is thrown if that has occurred
+    # it was opened, an ActiveRecord::StaleObjectError exception is thrown if that has occurred
     # and the update is ignored.
     #
-    # Check out <tt>ActiveRecord::Locking::Pessimistic</tt> for an alternative.
+    # Check out +ActiveRecord::Locking::Pessimistic+ for an alternative.
     #
     # == Usage
     #
@@ -69,6 +69,11 @@ module ActiveRecord
         end
       end
 
+      def initialize_dup(other) # :nodoc:
+        super
+        _clear_locking_column if locking_enabled?
+      end
+
       private
         def _create_record(attribute_names = self.attribute_names)
           if locking_enabled?
@@ -91,7 +96,7 @@ module ActiveRecord
             locking_column = self.class.locking_column
             lock_attribute_was = @attributes[locking_column]
 
-            update_constraints = _primary_key_constraints_hash
+            update_constraints = _query_constraints_hash
             update_constraints[locking_column] = _lock_value_for_database(locking_column)
 
             attribute_names = attribute_names.dup if attribute_names.frozen?
@@ -122,7 +127,7 @@ module ActiveRecord
 
           locking_column = self.class.locking_column
 
-          delete_constraints = _primary_key_constraints_hash
+          delete_constraints = _query_constraints_hash
           delete_constraints[locking_column] = _lock_value_for_database(locking_column)
 
           affected_rows = self.class._delete_record(delete_constraints)
@@ -142,6 +147,11 @@ module ActiveRecord
           end
         end
 
+        def _clear_locking_column
+          self[self.class.locking_column] = nil
+          clear_attribute_change(self.class.locking_column)
+        end
+
         module ClassMethods
           DEFAULT_LOCKING_COLUMN = "lock_version"
 
@@ -159,10 +169,7 @@ module ActiveRecord
           end
 
           # The version column used for optimistic locking. Defaults to +lock_version+.
-          def locking_column
-            @locking_column = DEFAULT_LOCKING_COLUMN unless defined?(@locking_column)
-            @locking_column
-          end
+          attr_reader :locking_column
 
           # Reset the column used for optimistic locking back to the +lock_version+ default.
           def reset_locking_column
@@ -182,6 +189,14 @@ module ActiveRecord
             end
             super
           end
+
+          private
+            def inherited(base)
+              super
+              base.class_eval do
+                @locking_column = DEFAULT_LOCKING_COLUMN
+              end
+            end
         end
     end
 

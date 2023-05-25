@@ -503,7 +503,7 @@
     }
   }
   class BlobRecord {
-    constructor(file, checksum, url, directUploadToken, attachmentName) {
+    constructor(file, checksum, url, customHeaders = {}) {
       this.file = file;
       this.attributes = {
         filename: file.name,
@@ -511,14 +511,15 @@
         byte_size: file.size,
         checksum: checksum
       };
-      this.directUploadToken = directUploadToken;
-      this.attachmentName = attachmentName;
       this.xhr = new XMLHttpRequest;
       this.xhr.open("POST", url, true);
       this.xhr.responseType = "json";
       this.xhr.setRequestHeader("Content-Type", "application/json");
       this.xhr.setRequestHeader("Accept", "application/json");
       this.xhr.setRequestHeader("X-Requested-With", "XMLHttpRequest");
+      Object.keys(customHeaders).forEach((headerKey => {
+        this.xhr.setRequestHeader(headerKey, customHeaders[headerKey]);
+      }));
       const csrfToken = getMetaValue("csrf-token");
       if (csrfToken != undefined) {
         this.xhr.setRequestHeader("X-CSRF-Token", csrfToken);
@@ -540,9 +541,7 @@
     create(callback) {
       this.callback = callback;
       this.xhr.send(JSON.stringify({
-        blob: this.attributes,
-        direct_upload_token: this.directUploadToken,
-        attachment_name: this.attachmentName
+        blob: this.attributes
       }));
     }
     requestDidLoad(event) {
@@ -600,13 +599,12 @@
   }
   let id = 0;
   class DirectUpload {
-    constructor(file, url, serviceName, attachmentName, delegate) {
+    constructor(file, url, delegate, customHeaders = {}) {
       this.id = ++id;
       this.file = file;
       this.url = url;
-      this.serviceName = serviceName;
-      this.attachmentName = attachmentName;
       this.delegate = delegate;
+      this.customHeaders = customHeaders;
     }
     create(callback) {
       FileChecksum.create(this.file, ((error, checksum) => {
@@ -614,7 +612,7 @@
           callback(error);
           return;
         }
-        const blob = new BlobRecord(this.file, checksum, this.url, this.serviceName, this.attachmentName);
+        const blob = new BlobRecord(this.file, checksum, this.url, this.customHeaders);
         notify(this.delegate, "directUploadWillCreateBlobWithXHR", blob.xhr);
         blob.create((error => {
           if (error) {
@@ -643,7 +641,7 @@
     constructor(input, file) {
       this.input = input;
       this.file = file;
-      this.directUpload = new DirectUpload(this.file, this.url, this.directUploadToken, this.attachmentName, this);
+      this.directUpload = new DirectUpload(this.file, this.url, this);
       this.dispatch("initialize");
     }
     start(callback) {
@@ -673,12 +671,6 @@
     }
     get url() {
       return this.input.getAttribute("data-direct-upload-url");
-    }
-    get directUploadToken() {
-      return this.input.getAttribute("data-direct-upload-token");
-    }
-    get attachmentName() {
-      return this.input.getAttribute("data-direct-upload-attachment-name");
     }
     dispatch(name, detail = {}) {
       detail.file = this.file;
@@ -828,6 +820,8 @@
   }
   setTimeout(autostart, 1);
   exports.DirectUpload = DirectUpload;
+  exports.DirectUploadController = DirectUploadController;
+  exports.DirectUploadsController = DirectUploadsController;
   exports.start = start;
   Object.defineProperty(exports, "__esModule", {
     value: true

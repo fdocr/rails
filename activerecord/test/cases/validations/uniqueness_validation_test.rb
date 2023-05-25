@@ -11,6 +11,8 @@ require "models/uuid_item"
 require "models/author"
 require "models/person"
 require "models/essay"
+require "models/keyboard"
+require "models/cpk"
 
 class Wizard < ActiveRecord::Base
   self.abstract_class = true
@@ -34,6 +36,10 @@ class ReplyWithTitleObject < Reply
   validates_uniqueness_of :content, scope: :title
 
   def title; ReplyTitle.new; end
+end
+
+class TopicWithEvent < Topic
+  belongs_to :event, foreign_key: :parent_id
 end
 
 class TopicWithUniqEvent < Topic
@@ -64,6 +70,14 @@ class TopicWithAfterCreate < Topic
   def set_author
     update!(author_name: "#{title} #{id}")
   end
+end
+
+class LessonWithUniqKeyboard < ActiveRecord::Base
+  self.table_name = "lessons"
+
+  belongs_to :keyboard, primary_key: :name, foreign_key: :name
+
+  validates_uniqueness_of :keyboard
 end
 
 class UniquenessValidationTest < ActiveRecord::TestCase
@@ -346,7 +360,7 @@ class UniquenessValidationTest < ActiveRecord::TestCase
     assert_not topic1.valid?
     assert_not topic1.save
 
-    if current_adapter?(:Mysql2Adapter)
+    if current_adapter?(:Mysql2Adapter, :TrilogyAdapter)
       # Case insensitive collation (utf8mb4_0900_ai_ci) by default.
       # Should not allow "David" if "david" exists.
       assert_not topic2.valid?
@@ -427,7 +441,7 @@ class UniquenessValidationTest < ActiveRecord::TestCase
 
       e2 = Event.create(title: "abcdefgh")
       assert_not e2.valid?, "Created an event whose title is not unique"
-    elsif current_adapter?(:Mysql2Adapter, :PostgreSQLAdapter, :OracleAdapter, :SQLServerAdapter)
+    elsif current_adapter?(:Mysql2Adapter, :TrilogyAdapter, :PostgreSQLAdapter, :OracleAdapter, :SQLServerAdapter)
       assert_raise(ActiveRecord::ValueTooLong) do
         Event.create(title: "abcdefgh")
       end
@@ -446,7 +460,7 @@ class UniquenessValidationTest < ActiveRecord::TestCase
 
       e2 = Event.create(title: "一二三四五六七八")
       assert_not e2.valid?, "Created an event whose title is not unique"
-    elsif current_adapter?(:Mysql2Adapter, :PostgreSQLAdapter, :OracleAdapter, :SQLServerAdapter)
+    elsif current_adapter?(:Mysql2Adapter, :TrilogyAdapter, :PostgreSQLAdapter, :OracleAdapter, :SQLServerAdapter)
       assert_raise(ActiveRecord::ValueTooLong) do
         Event.create(title: "一二三四五六七八")
       end
@@ -616,5 +630,204 @@ class UniquenessValidationTest < ActiveRecord::TestCase
     assert_not_predicate item2, :valid?
 
     assert_equal(["has already been taken"], item2.errors[:id])
+  end
+end
+
+class UniquenessValidationWithIndexTest < ActiveRecord::TestCase
+  self.use_transactional_tests = false
+
+  def setup
+    @connection = Topic.connection
+    @connection.schema_cache.clear!
+    Topic.delete_all
+    Event.delete_all
+  end
+
+  def teardown
+    Topic.clear_validators!
+    @connection.remove_index(:topics, name: :topics_index, if_exists: true)
+  end
+
+  def test_new_record
+    Topic.validates_uniqueness_of(:title)
+    @connection.add_index(:topics, :title, unique: true, name: :topics_index)
+
+    t = Topic.new(title: "abc")
+    assert_queries(1) do
+      t.valid?
+    end
+  end
+
+  def test_changing_non_unique_attribute
+    Topic.validates_uniqueness_of(:title)
+    @connection.add_index(:topics, :title, unique: true, name: :topics_index)
+
+    t = Topic.create!(title: "abc")
+    t.author_name = "John"
+    assert_no_queries(ignore_none: false) do
+      t.valid?
+    end
+  end
+
+  def test_changing_unique_attribute
+    Topic.validates_uniqueness_of(:title)
+    @connection.add_index(:topics, :title, unique: true, name: :topics_index)
+
+    t = Topic.create!(title: "abc")
+    t.title = "abc v2"
+    assert_queries(1) do
+      t.valid?
+    end
+  end
+
+  def test_changing_non_unique_attribute_and_unique_attribute_is_nil
+    Topic.validates_uniqueness_of(:title)
+    @connection.add_index(:topics, :title, unique: true, name: :topics_index)
+
+    t = Topic.create!
+    assert_nil t.title
+    t.author_name = "John"
+    assert_queries(1) do
+      t.valid?
+    end
+  end
+
+  def test_conditions
+    Topic.validates_uniqueness_of(:title, conditions: -> { where.not(author_name: nil) })
+    @connection.add_index(:topics, :title, unique: true, name: :topics_index)
+
+    t = Topic.create!(title: "abc")
+    t.title = "abc v2"
+    assert_queries(1) do
+      t.valid?
+    end
+  end
+
+  def test_case_sensitive
+    Topic.validates_uniqueness_of(:title, case_sensitive: true)
+    @connection.add_index(:topics, :title, unique: true, name: :topics_index)
+
+    t = Topic.create!(title: "abc")
+    t.title = "abc v2"
+    assert_queries(1) do
+      t.valid?
+    end
+  end
+
+  def test_partial_index
+    skip unless @connection.supports_partial_index?
+
+    Topic.validates_uniqueness_of(:title)
+    @connection.add_index(:topics, :title, unique: true, where: "approved", name: :topics_index)
+
+    t = Topic.create!(title: "abc")
+    t.author_name = "John"
+    assert_queries(1) do
+      t.valid?
+    end
+  end
+
+  def test_non_unique_index
+    Topic.validates_uniqueness_of(:title)
+    @connection.add_index(:topics, :title, name: :topics_index)
+
+    t = Topic.create!(title: "abc")
+    t.author_name = "John"
+    assert_queries(1) do
+      t.valid?
+    end
+  end
+
+  def test_scope
+    Topic.validates_uniqueness_of(:title, scope: :author_name)
+    @connection.add_index(:topics, [:author_name, :title], unique: true, name: :topics_index)
+
+    t = Topic.create!(title: "abc", author_name: "John")
+    t.content = "hello world"
+    assert_no_queries(ignore_none: false) do
+      t.valid?
+    end
+
+    t.author_name = "Amy"
+    assert_queries(1) do
+      t.valid?
+    end
+  end
+
+  def test_uniqueness_on_relation
+    TopicWithEvent.validates_uniqueness_of(:event)
+    @connection.add_index(:topics, :parent_id, unique: true, name: :topics_index)
+
+    e1 = Event.create!(title: "abc")
+    e2 = Event.create!(title: "cde")
+    t = TopicWithEvent.create!(event: e1)
+
+    t.content = "hello world"
+    assert_no_queries(ignore_none: false) do
+      t.valid?
+    end
+
+    t.event = e2
+    assert_queries(1) do
+      t.valid?
+    end
+  ensure
+    TopicWithEvent.clear_validators!
+    Event.delete_all
+  end
+
+  def test_uniqueness_on_custom_relation_primary_key
+    Keyboard.create!(name: "Keyboard #1")
+    LessonWithUniqKeyboard.create!(name: "Keyboard #1")
+
+    another = LessonWithUniqKeyboard.new(name: "Keyboard #1")
+    assert_not_predicate another, :valid?
+    assert_equal ["has already been taken"], another.errors[:keyboard]
+  end
+
+  def test_index_of_sublist_of_columns
+    Topic.validates_uniqueness_of(:title, scope: :author_name)
+    @connection.add_index(:topics, :author_name, unique: true, name: :topics_index)
+
+    t = Topic.create!(title: "abc", author_name: "John")
+    t.content = "hello world"
+    assert_no_queries(ignore_none: false) do
+      t.valid?
+    end
+
+    t.author_name = "Amy"
+    assert_queries(1, ignore_none: false) do
+      t.valid?
+    end
+  end
+
+  def test_index_of_columns_list_and_extra_columns
+    Topic.validates_uniqueness_of(:title)
+    @connection.add_index(:topics, [:title, :author_name], unique: true, name: :topics_index)
+
+    t = Topic.create!(title: "abc", author_name: "John")
+    t.content = "hello world"
+    assert_queries(1) do
+      t.valid?
+    end
+  end
+end
+
+class UniquenessWithCompositeKey < ActiveRecord::TestCase
+  class BookWithUniqueRevision < Cpk::Book
+    validates :revision, uniqueness: true
+  end
+
+  def test_uniqueness_validation_for_model_with_composite_key
+    book_one = BookWithUniqueRevision.create!(author_id: 1, number: 42, title: "Author 1's book", revision: 36)
+    book_two = BookWithUniqueRevision.create!(author_id: 2, number: 42, title: "Author 2's book", revision: 37)
+
+    assert_not_equal book_one.revision, book_two.revision
+
+    assert_changes("book_two.valid?", from: true, to: false) do
+      book_two.revision = book_one.revision
+    end
+  ensure
+    BookWithUniqueRevision.delete_all
   end
 end

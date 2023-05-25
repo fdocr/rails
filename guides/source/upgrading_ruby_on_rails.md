@@ -78,8 +78,94 @@ To allow you to upgrade to new defaults one by one, the update task has created 
 Upgrading from Rails 7.0 to Rails 7.1
 -------------------------------------
 
+For more information on changes made to Rails 7.1 please see the [release notes](7_1_release_notes.html).
+
+### Autoloaded paths are no longer in load path
+
+Starting from Rails 7.1, all paths managed by the autoloader will no longer be added to `$LOAD_PATH`.
+This means it won't be possible to load them with a manual `require` call, the class or module can be referenced instead.
+
+Reducing the size of `$LOAD_PATH` speed-up `require` calls for apps not using `bootsnap`, and reduce the
+size of the `bootsnap` cache for the others.
+
+### `ActiveStorage::BaseController` no longer includes the streaming concern
+
+Application controllers that inherit from `ActiveStorage::BaseController` and use streaming to implement custom file serving logic must now explicitly include the `ActiveStorage::Streaming` module.
+
+### `MemCacheStore` and `RedisCacheStore` now use connection pooling by default
+
+The `connection_pool` gem has been added as a dependency of the `activesupport` gem,
+and the `MemCacheStore` and `RedisCacheStore` now use connection pooling by default.
+
+If you don't want to use connection pooling, set `:pool` option to `false` when
+configuring your cache store:
+
+```ruby
+config.cache_store = :mem_cache_store, "cache.example.com", pool: false
+```
+
+See the [caching with Rails](https://guides.rubyonrails.org/v7.1/caching_with_rails.html#connection-pool-options) guide for more information.
+
+### `SQLite3Adapter` now configured to be used in a strict strings mode
+
+The use of a strict strings mode disables double-quoted string literals.
+
+SQLite has some quirks around double-quoted string literals.
+It first tries to consider double-quoted strings as identifier names, but if they don't exist
+it then considers them as string literals. Because of this, typos can silently go unnoticed.
+For example, it is possible to create an index for a non existing column.
+See [SQLite documentation](https://www.sqlite.org/quirks.html#double_quoted_string_literals_are_accepted) for more details.
+
+If you don't want to use `SQLite3Adapter` in a strict mode, you can disable this behavior:
+
+```ruby
+# config/application.rb
+config.active_record.sqlite3_adapter_strict_strings_by_default = false
+```
+
+### Support multiple preview paths for `ActionMailer::Preview`
+
+Option `config.action_mailer.preview_path` is deprecated in favor of `config.action_mailer.preview_paths`. Appending paths to this configuration option will cause those paths to be used in the search for mailer previews.
+
+```ruby
+config.action_mailer.preview_paths << "#{Rails.root}/lib/mailer_previews"
+```
+
+### `config.i18n.raise_on_missing_translations = true` now raises on any missing translation.
+
+Previously it would only raise when called in a view or controller. Now it will raise anytime `I18n.t` is provided an unrecognised key.
+
+```ruby
+# with config.i18n.raise_on_missing_translations = true
+
+# in a view or controller:
+t("missing.key") # raises in 7.0, raises in 7.1
+I18n.t("missing.key") # didn't raise in 7.0, raises in 7.1
+
+# anywhere:
+I18n.t("missing.key") # didn't raise in 7.0, raises in 7.1
+```
+
+If you don't want this behaviour, you can set `config.i18n.raise_on_missing_translations = false`:
+
+```ruby
+# with config.i18n.raise_on_missing_translations = false
+
+# in a view or controller:
+t("missing.key") # didn't raise in 7.0, doesn't raise in 7.1
+I18n.t("missing.key") # didn't raise in 7.0, doesn't raise in 7.1
+
+# anywhere:
+I18n.t("missing.key") # didn't raise in 7.0, doesn't raise in 7.1
+```
+
+Alternatively, you can customise the `I18n.exception_handler`.
+See the [i18n guide](https://guides.rubyonrails.org/v7.1/i18n.html#using-different-exception-handlers) for more information.
+
 Upgrading from Rails 6.1 to Rails 7.0
 -------------------------------------
+
+For more information on changes made to Rails 7.0 please see the [release notes](7_0_release_notes.html).
 
 ### `ActionView::Helpers::UrlHelper#button_to` changed behavior
 
@@ -106,20 +192,22 @@ If your application uses Spring, it needs to be upgraded to at least version 3.0
 undefined method `mechanism=' for ActiveSupport::Dependencies:Module
 ```
 
-Also, make sure `config.cache_classes` is set to `false` in `config/environments/test.rb`.
+Also, make sure [`config.cache_classes`][] is set to `false` in `config/environments/test.rb`.
+
+[`config.cache_classes`]: configuring.html#config-cache-classes
 
 ### Sprockets is now an optional dependency
 
 The gem `rails` doesn't depend on `sprockets-rails` anymore. If your application still needs to use Sprockets,
 make sure to add `sprockets-rails` to your Gemfile.
 
-```
+```ruby
 gem "sprockets-rails"
 ```
 
 ### Applications need to run in `zeitwerk` mode
 
-Applications still running in `classic` mode have to switch to `zeitwerk` mode. Please check the [Classic to Zeitwerk HOWTO](https://guides.rubyonrails.org/classic_to_zeitwerk_howto.html) guide for details.
+Applications still running in `classic` mode have to switch to `zeitwerk` mode. Please check the [Classic to Zeitwerk HOWTO](https://guides.rubyonrails.org/v7.0/classic_to_zeitwerk_howto.html) guide for details.
 
 ### The setter `config.autoloader=` has been deleted
 
@@ -142,7 +230,7 @@ A few of highlights:
 
 * If you want to trace the activity of the autoloader, `ActiveSupport::Dependencies.verbose=` is no longer available, just throw `Rails.autoloaders.log!` in `config/application.rb`.
 
-Auxiliary internal classes or modules are also gone, like like `ActiveSupport::Dependencies::Reference`, `ActiveSupport::Dependencies::Blamable`, and others.
+Auxiliary internal classes or modules are also gone, like `ActiveSupport::Dependencies::Reference`, `ActiveSupport::Dependencies::Blamable`, and others.
 
 ### Autoloading during initialization
 
@@ -161,7 +249,7 @@ If you still get this warning in the logs, please check the section about autolo
 
 ### Ability to configure `config.autoload_once_paths`
 
-`config.autoload_once_paths` can be set in the body of the application class defined in `config/application.rb` or in the configuration for environments in `config/environments/*`.
+[`config.autoload_once_paths`][] can be set in the body of the application class defined in `config/application.rb` or in the configuration for environments in `config/environments/*`.
 
 Similarly, engines can configure that collection in the class body of the engine class or in the configuration for environments.
 
@@ -169,7 +257,9 @@ After that, the collection is frozen, and you can autoload from those paths. In 
 
 If you configured this setting after the environments configuration has been processed and are getting `FrozenError`, please just move the code.
 
-### `ActionDispatch::Request#content_type` now returned Content-Type header as it is.
+[`config.autoload_once_paths`]: configuring.html#config-autoload-once-paths
+
+### `ActionDispatch::Request#content_type` now returns Content-Type header as it is.
 
 Previously, `ActionDispatch::Request#content_type` returned value does NOT contain charset part.
 This behavior changed to returned Content-Type header containing charset part as it is.
@@ -191,29 +281,38 @@ request.content_type #=> "text/csv; header=present; charset=utf-16"
 request.media_type   #=> "text/csv"
 ```
 
-### Key generator digest class changing to use SHA256
+### Key generator digest class change requires a cookie rotator
 
 The default digest class for the key generator is changing from SHA1 to SHA256.
 This has consequences in any encrypted message generated by Rails, including
 encrypted cookies.
 
 In order to be able to read messages using the old digest class it is necessary
-to register a rotator.
+to register a rotator. Failing to do so may result in users having their sessions
+invalidated during the upgrade.
 
-The following is an example for rotator for the encrypted cookies.
+The following is an example for rotator for the encrypted and the signed cookies.
 
 ```ruby
-Rails.application.config.action_dispatch.cookies_rotations.tap do |cookies|
-  salt = Rails.application.config.action_dispatch.authenticated_encrypted_cookie_salt
-  secret_key_base = Rails.application.secrets.secret_key_base
+# config/initializers/cookie_rotator.rb
+Rails.application.config.after_initialize do
+  Rails.application.config.action_dispatch.cookies_rotations.tap do |cookies|
+    authenticated_encrypted_cookie_salt = Rails.application.config.action_dispatch.authenticated_encrypted_cookie_salt
+    signed_cookie_salt = Rails.application.config.action_dispatch.signed_cookie_salt
 
-  key_generator = ActiveSupport::KeyGenerator.new(
-    secret_key_base, iterations: 1000, hash_digest_class: OpenSSL::Digest::SHA1
-  )
-  key_len = ActiveSupport::MessageEncryptor.key_len
-  secret = key_generator.generate_key(salt, key_len)
+    secret_key_base = Rails.application.secret_key_base
 
-  cookies.rotate :encrypted, secret
+    key_generator = ActiveSupport::KeyGenerator.new(
+      secret_key_base, iterations: 1000, hash_digest_class: OpenSSL::Digest::SHA1
+    )
+    key_len = ActiveSupport::MessageEncryptor.key_len
+
+    old_encrypted_secret = key_generator.generate_key(authenticated_encrypted_cookie_salt, key_len)
+    old_signed_secret = key_generator.generate_key(signed_cookie_salt)
+
+    cookies.rotate :encrypted, old_encrypted_secret
+    cookies.rotate :signed, old_signed_secret
+  end
 end
 ```
 
@@ -278,6 +377,7 @@ You will then need to change existing image transformation code to the
 `image_processing` macros, and replace ImageMagick's options with libvips' options.
 
 #### Replace resize with resize_to_limit
+
 ```diff
 - variant(resize: "100x")
 + variant(resize_to_limit: [100, nil])
@@ -286,6 +386,7 @@ You will then need to change existing image transformation code to the
 If you don't do this, when you switch to vips you will see this error: `no implicit conversion to float from string`.
 
 #### Use an array when cropping
+
 ```diff
 - variant(crop: "1920x1080+0+0")
 + variant(crop: [0, 0, 1920, 1080])
@@ -303,6 +404,7 @@ Vips is more strict than ImageMagick when it comes to cropping:
 If you don't do this when migrating to vips, you will see the following error: `extract_area: bad extract area`
 
 #### Adjust the background color used for `resize_and_pad`
+
 Vips uses black as the default background color `resize_and_pad`, instead of white like ImageMagick. Fix that by using the `background` option:
 
 ```diff
@@ -311,6 +413,7 @@ Vips uses black as the default background color `resize_and_pad`, instead of whi
 ```
 
 #### Remove any EXIF based rotation
+
 Vips will auto rotate images using the EXIF value when processing variants. If you were storing rotation values from user uploaded photos to apply rotation with ImageMagick, you must stop doing that:
 
 ```diff
@@ -319,6 +422,7 @@ Vips will auto rotate images using the EXIF value when processing variants. If y
 ```
 
 #### Replace monochrome with colourspace
+
 Vips uses a different option to make monochrome images:
 
 ```diff
@@ -327,6 +431,7 @@ Vips uses a different option to make monochrome images:
 ```
 
 #### Switch to libvips options for compressing images
+
 JPEG
 
 ```diff
@@ -356,6 +461,7 @@ GIF
 ```
 
 #### Deploy to production
+
 Active Storage encodes into the url for the image the list of transformations that must be performed.
 If your app is caching these urls, your images will break after you deploy the new code to production.
 Because of this you must manually invalidate your affected cache keys.
@@ -379,6 +485,35 @@ You can invalidate the cache either by touching the product, or changing the cac
   <% end %>
 <% end %>
 ```
+
+### Rails version is now included in the Active Record schema dump
+
+Rails 7.0 changed some default values for some column types. To avoid that application upgrading from 6.1 to 7.0
+load the current schema using the new 7.0 defaults, Rails now includes the version of the framework in the schema dump.
+
+Before loading the schema for the first time in Rails 7.0, make sure to run `rails app:update` to ensure that the
+version of the schema is included in the schema dump.
+
+The schema file will look like this:
+
+```ruby
+# This file is auto-generated from the current state of the database. Instead
+# of editing this file, please use the migrations feature of Active Record to
+# incrementally modify your database, and then regenerate this schema definition.
+#
+# This file is the source Rails uses to define your schema when running `bin/rails
+# db:schema:load`. When creating a new database, `bin/rails db:schema:load` tends to
+# be faster and is potentially less error prone than running all of your
+# migrations from scratch. Old migrations may fail to apply correctly if those
+# migrations use external dependencies or application code.
+#
+# It's strongly recommended that you check this file into your version control system.
+
+ActiveRecord::Schema[6.1].define(version: 2022_01_28_123512) do
+```
+
+NOTE: The first time you dump the schema with Rails 7.0, you will see many changes to that file, including
+some column information. Make sure to review the new schema file content and commit it to your repository.
 
 Upgrading from Rails 6.0 to Rails 6.1
 -------------------------------------
@@ -428,10 +563,10 @@ end
 get('my_action.csv')
 ```
 
-Previous behaviour was returning a `text/csv` response's Content-Type which is inaccurate since a JSON response is being rendered.
-Current behaviour correctly returns a `application/json` response's Content-Type.
+Previous behavior was returning a `text/csv` response's Content-Type which is inaccurate since a JSON response is being rendered.
+Current behavior correctly returns a `application/json` response's Content-Type.
 
-If your application relies on the previous incorrect behaviour, you are encouraged to specify
+If your application relies on the previous incorrect behavior, you are encouraged to specify
 which formats your action accepts, i.e.
 
 ```ruby
@@ -509,6 +644,15 @@ video.preview(resize_to_limit: [100, 100])
 video.preview(resize_to_fill: [100, 100])
 ```
 
+### New `ActiveModel::Error` class
+
+Errors are now instances of a new `ActiveModel::Error` class, with changes to
+the API. Some of these changes may throw errors depending on how you manipulate
+errors, while others will print deprecation warnings to be fixed for Rails 7.0.
+
+More information about this change and details about the API changes can be
+found [in this PR](https://github.com/rails/rails/pull/32313).
+
 Upgrading from Rails 5.2 to Rails 6.0
 -------------------------------------
 
@@ -531,9 +675,12 @@ $ bin/rails webpacker:install
 ### Force SSL
 
 The `force_ssl` method on controllers has been deprecated and will be removed in
-Rails 6.1. You are encouraged to enable `config.force_ssl` to enforce HTTPS
+Rails 6.1. You are encouraged to enable [`config.force_ssl`][] to enforce HTTPS
 connections throughout your application. If you need to exempt certain endpoints
-from redirection, you can use `config.ssl_options` to configure that behavior.
+from redirection, you can use [`config.ssl_options`][] to configure that behavior.
+
+[`config.force_ssl`]: configuring.html#config-force-ssl
+[`config.ssl_options`]: configuring.html#config-ssl-options
 
 ### Purpose and expiry metadata is now embedded inside signed and encrypted cookies for increased security
 
@@ -619,6 +766,23 @@ resp = ActionDispatch::Response.new(200, "Content-Type" => "text/csv; header=pre
 resp.content_type #=> "text/csv; header=present; charset=utf-16"
 resp.media_type   #=> "text/csv"
 ```
+
+### New `config.hosts` setting
+
+Rails now has a new `config.hosts` setting for security purposes. This setting
+defaults to `localhost` in development. If you use other domains in development
+you need to allow them like this:
+
+```ruby
+# config/environments/development.rb
+
+config.hosts << 'dev.myapp.com'
+config.hosts << /[a-z0-9-]+\.myapp\.com/ # Optionally, regexp is allowed as well
+```
+
+For other environments `config.hosts` is empty by default, which means Rails
+won't validate the host at all. You can optionally add them if you want to
+validate it in production.
 
 ### Autoloading
 
@@ -819,17 +983,13 @@ In addition to that, Bootsnap needs to disable the iseq cache due to a bug in th
 
 #### `config.add_autoload_paths_to_load_path`
 
-The new configuration point
-
-```ruby
-config.add_autoload_paths_to_load_path
-```
-
-is `true` by default for backwards compatibility, but allows you to opt-out from adding the autoload paths to `$LOAD_PATH`.
+The new configuration point [`config.add_autoload_paths_to_load_path`][] is `true` by default for backwards compatibility, but allows you to opt-out from adding the autoload paths to `$LOAD_PATH`.
 
 This makes sense in most applications, since you never should require a file in `app/models`, for example, and Zeitwerk only uses absolute file names internally.
 
 By opting-out you optimize `$LOAD_PATH` lookups (less directories to check), and save Bootsnap work and memory consumption, since it does not need to build an index for these directories.
+
+[`config.add_autoload_paths_to_load_path`]: configuring.html#config-add-autoload-paths-to-load-path
 
 #### Thread-safety
 
@@ -916,7 +1076,17 @@ user.highlights.first.filename # => "funky.jpg"
 user.highlights.second.filename # => "town.jpg"
 ```
 
-Existing applications can opt in to this new behavior by setting `config.active_storage.replace_on_assign_to_many` to `true`. The old behavior will be deprecated in Rails 7.0 and removed in Rails 7.1.
+Existing applications can opt in to this new behavior by setting [`config.active_storage.replace_on_assign_to_many`][] to `true`. The old behavior will be deprecated in Rails 7.0 and removed in Rails 7.1.
+
+[`config.active_storage.replace_on_assign_to_many`]: configuring.html#config-active-storage-replace-on-assign-to-many
+
+### Custom exception handling applications
+
+Invalid `Accept` or `Content-Type` request headers will now raise an exception.
+The default [`config.exceptions_app`][] specifically handles that error and compensates for it.
+Custom exceptions applications will need to handle that error as well, or such requests will cause Rails to use the fallback exceptions application, which returns a `500 Internal Server Error`.
+
+[`config.exceptions_app`]: configuring.html#config-exceptions-app
 
 Upgrading from Rails 5.1 to Rails 5.2
 -------------------------------------
@@ -926,8 +1096,14 @@ For more information on changes made to Rails 5.2 please see the [release notes]
 ### Bootsnap
 
 Rails 5.2 adds bootsnap gem in the [newly generated app's Gemfile](https://github.com/rails/rails/pull/29313).
-The `app:update` command sets it up in `boot.rb`. If you want to use it, then add it in the Gemfile,
-otherwise change the `boot.rb` to not use bootsnap.
+The `app:update` command sets it up in `boot.rb`. If you want to use it, then add it in the Gemfile:
+
+```ruby
+# Reduces boot times through caching; required in config/boot.rb
+gem 'bootsnap', require: false
+```
+
+Otherwise change the `boot.rb` to not use bootsnap.
 
 ### Expiry in signed or encrypted cookie is now embedded in the cookies values
 
@@ -990,7 +1166,7 @@ In Rails 5.0, `redirect_to :back` was deprecated. In Rails 5.1, it was removed c
 As an alternative, use `redirect_back`. It's important to note that `redirect_back` also takes
 a `fallback_location` option which will be used in case the `HTTP_REFERER` is missing.
 
-```
+```ruby
 redirect_back(fallback_location: root_path)
 ```
 
@@ -1299,12 +1475,14 @@ config.action_mailer.deliver_later_queue_name = :new_queue_name
 
 #### Support Fragment Caching in Action Mailer Views
 
-Set `config.action_mailer.perform_caching` in your config to determine whether your Action Mailer views
+Set [`config.action_mailer.perform_caching`][] in your config to determine whether your Action Mailer views
 should support caching.
 
 ```ruby
 config.action_mailer.perform_caching = true
 ```
+
+[`config.action_mailer.perform_caching`]: configuring.html#config-action-mailer-perform-caching
 
 #### Configure the Output of `db:structure:dump`
 
@@ -1558,7 +1736,7 @@ The migration procedure is as follows:
 2. run `bundle install`.
 3. run `bin/rake db:schema:dump`.
 4. make sure that `db/schema.rb` contains every foreign key definition with
-the necessary options.
+  the necessary options.
 
 Upgrading from Rails 4.0 to Rails 4.1
 -------------------------------------
@@ -1796,7 +1974,7 @@ class ReadOnlyModel < ActiveRecord::Base
 
   private
     def before_save_callback
-      return false
+      false
     end
 end
 ```
@@ -1948,7 +2126,7 @@ start using the more precise `:plain`, `:html`, and `:body` options instead.
 Using `render :text` may pose a security risk, as the content is sent as
 `text/html`.
 
-### PostgreSQL json and hstore datatypes
+### PostgreSQL JSON and hstore datatypes
 
 Rails 4.1 will map `json` and `hstore` columns to a string-keyed Ruby `Hash`.
 In earlier versions, a `HashWithIndifferentAccess` was used. This means that
@@ -2104,12 +2282,12 @@ Rails 4.0 no longer supports loading plugins from `vendor/plugins`. You must rep
 * Rails 4.0 has changed `serialized_attributes` and `attr_readonly` to class methods only. You shouldn't use instance methods since it's now deprecated. You should change them to use class methods, e.g. `self.serialized_attributes` to `self.class.serialized_attributes`.
 
 * When using the default coder, assigning `nil` to a serialized attribute will save it
-to the database as `NULL` instead of passing the `nil` value through YAML (`"--- \n...\n"`).
+  to the database as `NULL` instead of passing the `nil` value through YAML (`"--- \n...\n"`).
 
 * Rails 4.0 has removed `attr_accessible` and `attr_protected` feature in favor of Strong Parameters. You can use the [Protected Attributes gem](https://github.com/rails/protected_attributes) for a smooth upgrade path.
 
 * If you are not using Protected Attributes, you can remove any options related to
-this gem such as `whitelist_attributes` or `mass_assignment_sanitizer` options.
+  this gem such as `whitelist_attributes` or `mass_assignment_sanitizer` options.
 
 * Rails 4.0 requires that scopes use a callable object such as a Proc or lambda:
 
@@ -2175,7 +2353,7 @@ Rails 4.0 extracted Active Resource to its own gem. If you still need the featur
 
 ### Action Pack
 
-*   Rails 4.0 introduces `ActiveSupport::KeyGenerator` and uses this as a base from which to generate and verify signed cookies (among other things). Existing signed cookies generated with Rails 3.x will be transparently upgraded if you leave your existing `secret_token` in place and add the new `secret_key_base`.
+* Rails 4.0 introduces `ActiveSupport::KeyGenerator` and uses this as a base from which to generate and verify signed cookies (among other things). Existing signed cookies generated with Rails 3.x will be transparently upgraded if you leave your existing `secret_token` in place and add the new `secret_key_base`.
 
     ```ruby
       # config/initializers/secret_token.rb
@@ -2187,7 +2365,7 @@ Rails 4.0 extracted Active Resource to its own gem. If you still need the featur
 
     If you are relying on the ability for external applications or JavaScript to be able to read your Rails app's signed session cookies (or signed cookies in general) you should not set `secret_key_base` until you have decoupled these concerns.
 
-*   Rails 4.0 encrypts the contents of cookie-based sessions if `secret_key_base` has been set. Rails 3.x signed, but did not encrypt, the contents of cookie-based session. Signed cookies are "secure" in that they are verified to have been generated by your app and are tamper-proof. However, the contents can be viewed by end users, and encrypting the contents eliminates this caveat/concern without a significant performance penalty.
+* Rails 4.0 encrypts the contents of cookie-based sessions if `secret_key_base` has been set. Rails 3.x signed, but did not encrypt, the contents of cookie-based session. Signed cookies are "secure" in that they are verified to have been generated by your app and are tamper-proof. However, the contents can be viewed by end users, and encrypting the contents eliminates this caveat/concern without a significant performance penalty.
 
     Please read [Pull Request #9978](https://github.com/rails/rails/pull/9978) for details on the move to encrypted session cookies.
 
@@ -2206,13 +2384,13 @@ Rails 4.0 extracted Active Resource to its own gem. If you still need the featur
 * Rails 4.0 deprecates the `dom_id` and `dom_class` methods in controllers (they are fine in views). You will need to include the `ActionView::RecordIdentifier` module in controllers requiring this feature.
 
 * Rails 4.0 deprecates the `:confirm` option for the `link_to` helper. You should
-instead rely on a data attribute (e.g. `data: { confirm: 'Are you sure?' }`).
-This deprecation also concerns the helpers based on this one (such as `link_to_if`
-or `link_to_unless`).
+  instead rely on a data attribute (e.g. `data: { confirm: 'Are you sure?' }`).
+  This deprecation also concerns the helpers based on this one (such as `link_to_if`
+  or `link_to_unless`).
 
 * Rails 4.0 changed how `assert_generates`, `assert_recognizes`, and `assert_routing` work. Now all these assertions raise `Assertion` instead of `ActionController::RoutingError`.
 
-*   Rails 4.0 raises an `ArgumentError` if clashing named routes are defined. This can be triggered by explicitly defined named routes or by the `resources` method. Here are two examples that clash with routes named `example_path`:
+* Rails 4.0 raises an `ArgumentError` if clashing named routes are defined. This can be triggered by explicitly defined named routes or by the `resources` method. Here are two examples that clash with routes named `example_path`:
 
     ```ruby
     get 'one' => 'test#example', as: :example
@@ -2229,7 +2407,7 @@ or `link_to_unless`).
     the `resources` method to restrict the routes created as detailed in the
     [Routing Guide](routing.html#restricting-the-routes-created).
 
-*   Rails 4.0 also changed the way unicode character routes are drawn. Now you can draw unicode character routes directly. If you already draw such routes, you must change them, for example:
+* Rails 4.0 also changed the way unicode character routes are drawn. Now you can draw unicode character routes directly. If you already draw such routes, you must change them, for example:
 
     ```ruby
     get Rack::Utils.escape('こんにちは'), controller: 'welcome', action: 'index'
@@ -2241,7 +2419,7 @@ or `link_to_unless`).
     get 'こんにちは', controller: 'welcome', action: 'index'
     ```
 
-*   Rails 4.0 requires that routes using `match` must specify the request method. For example:
+* Rails 4.0 requires that routes using `match` must specify the request method. For example:
 
     ```ruby
       # Rails 3.x
@@ -2254,7 +2432,7 @@ or `link_to_unless`).
       get '/' => 'root#index'
     ```
 
-*   Rails 4.0 has removed `ActionDispatch::BestStandardsSupport` middleware, `<!DOCTYPE html>` already triggers standards mode per https://msdn.microsoft.com/en-us/library/jj676915(v=vs.85).aspx and ChromeFrame header has been moved to `config.action_dispatch.default_headers`.
+* Rails 4.0 has removed `ActionDispatch::BestStandardsSupport` middleware, `<!DOCTYPE html>` already triggers standards mode per https://msdn.microsoft.com/en-us/library/jj676915(v=vs.85).aspx and ChromeFrame header has been moved to `config.action_dispatch.default_headers`.
 
     Remember you must also remove any references to the middleware from your application code, for example:
 
@@ -2265,7 +2443,7 @@ or `link_to_unless`).
 
     Also check your environment settings for `config.action_dispatch.best_standards_support` and remove it if present.
 
-*   Rails 4.0 allows configuration of HTTP headers by setting `config.action_dispatch.default_headers`. The defaults are as follows:
+* Rails 4.0 allows configuration of HTTP headers by setting `config.action_dispatch.default_headers`. The defaults are as follows:
 
     ```ruby
       config.action_dispatch.default_headers = {
@@ -2276,7 +2454,7 @@ or `link_to_unless`).
 
     Please note that if your application is dependent on loading certain pages in a `<frame>` or `<iframe>`, then you may need to explicitly set `X-Frame-Options` to `ALLOW-FROM ...` or `ALLOWALL`.
 
-* In Rails 4.0, precompiling assets no longer automatically copies non-JS/CSS assets from `vendor/assets` and `lib/assets`. Rails application and engine developers should put these assets in `app/assets` or configure `config.assets.precompile`.
+* In Rails 4.0, precompiling assets no longer automatically copies non-JS/CSS assets from `vendor/assets` and `lib/assets`. Rails application and engine developers should put these assets in `app/assets` or configure [`config.assets.precompile`][].
 
 * In Rails 4.0, `ActionController::UnknownFormat` is raised when the action doesn't handle the request format. By default, the exception is handled by responding with 406 Not Acceptable, but you can override that now. In Rails 3, 406 Not Acceptable was always returned. No overrides.
 
@@ -2293,13 +2471,15 @@ or `link_to_unless`).
 * Rails 4.0 deprecated `ActionController::Response` in favor of `ActionDispatch::Response`.
 * Rails 4.0 deprecated `ActionController::Routing` in favor of `ActionDispatch::Routing`.
 
+[`config.assets.precompile`]: configuring.html#config-assets-precompile
+
 ### Active Support
 
 Rails 4.0 removes the `j` alias for `ERB::Util#json_escape` since `j` is already used for `ActionView::Helpers::JavaScriptHelper#escape_javascript`.
 
 #### Cache
 
-The caching method changed between Rails 3.x and 4.0. You should [change the cache namespace](https://guides.rubyonrails.org/caching_with_rails.html#activesupport-cache-store) and roll out with a cold cache.
+The caching method changed between Rails 3.x and 4.0. You should [change the cache namespace](https://guides.rubyonrails.org/v4.0/caching_with_rails.html#activesupport-cache-store) and roll out with a cold cache.
 
 ### Helpers Loading Order
 
@@ -2312,11 +2492,13 @@ The order in which helpers from more than one directory are loaded has changed i
 ### sprockets-rails
 
 * `assets:precompile:primary` and `assets:precompile:all` have been removed. Use `assets:precompile` instead.
-* The `config.assets.compress` option should be changed to `config.assets.js_compressor` like so for instance:
+* The `config.assets.compress` option should be changed to [`config.assets.js_compressor`][] like so for instance:
 
     ```ruby
     config.assets.js_compressor = :uglifier
     ```
+
+[`config.assets.js_compressor`]: configuring.html#config-assets-js-compressor
 
 ### sass-rails
 

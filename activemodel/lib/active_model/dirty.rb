@@ -3,7 +3,7 @@
 require "active_model/attribute_mutation_tracker"
 
 module ActiveModel
-  # == Active \Model \Dirty
+  # = Active \Model \Dirty
   #
   # Provides a way to track changes in your object in the same way as
   # Active Record does.
@@ -175,22 +175,22 @@ module ActiveModel
     end
 
     # Dispatch target for <tt>*_changed?</tt> attribute methods.
-    def attribute_changed?(attr_name, **options) # :nodoc:
+    def attribute_changed?(attr_name, **options)
       mutations_from_database.changed?(attr_name.to_s, **options)
     end
 
     # Dispatch target for <tt>*_was</tt> attribute methods.
-    def attribute_was(attr_name) # :nodoc:
+    def attribute_was(attr_name)
       mutations_from_database.original_value(attr_name.to_s)
     end
 
     # Dispatch target for <tt>*_previously_changed?</tt> attribute methods.
-    def attribute_previously_changed?(attr_name, **options) # :nodoc:
+    def attribute_previously_changed?(attr_name, **options)
       mutations_before_last_save.changed?(attr_name.to_s, **options)
     end
 
     # Dispatch target for <tt>*_previously_was</tt> attribute methods.
-    def attribute_previously_was(attr_name) # :nodoc:
+    def attribute_previously_was(attr_name)
       mutations_before_last_save.original_value(attr_name.to_s)
     end
 
@@ -247,6 +247,12 @@ module ActiveModel
     end
 
     private
+      def init_internals
+        super
+        @mutations_before_last_save = nil
+        @mutations_from_database = nil
+      end
+
       def clear_attribute_change(attr_name)
         mutations_from_database.forget_change(attr_name.to_s)
       end

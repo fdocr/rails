@@ -3,8 +3,9 @@
 require "rails-html-sanitizer"
 
 module ActionView
-  # = Action View Sanitize Helpers
   module Helpers # :nodoc:
+    # = Action View Sanitize \Helpers
+    #
     # The SanitizeHelper module provides a set of methods for scrubbing text of undesired HTML elements.
     # These helper methods extend Action View making them callable within your template files.
     module SanitizeHelper
@@ -101,7 +102,7 @@ module ActionView
       #   strip_tags("> A quote from Smith & Wesson")
       #   # => &gt; A quote from Smith &amp; Wesson
       def strip_tags(html)
-        self.class.full_sanitizer.sanitize(html)
+        self.class.full_sanitizer.sanitize(html)&.html_safe
       end
 
       # Strips all link tags from +html+ leaving just the link text.

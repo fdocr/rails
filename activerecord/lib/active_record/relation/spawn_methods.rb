@@ -6,7 +6,6 @@ require "active_record/relation/merger"
 
 module ActiveRecord
   module SpawnMethods
-    # This is overridden by Associations::CollectionProxy
     def spawn # :nodoc:
       already_in_scope?(klass.scope_registry) ? klass.all : clone
     end
@@ -28,6 +27,9 @@ module ActiveRecord
     #   # => Post.where(published: true).joins(:comments)
     #
     # This is mainly intended for sharing common conditions between multiple associations.
+    #
+    # For conditions that exist in both relations, those from <tt>other</tt> will take precedence.
+    # To find the intersection of two relations, use QueryMethods#and.
     def merge(other, *rest)
       if other.is_a?(Array)
         records & other

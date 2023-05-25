@@ -204,9 +204,35 @@ module RenderTestCases
   def test_render_outside_path
     assert File.exist?(File.expand_path("../../test/abstract_unit.rb", __dir__))
     assert_raises ActionView::MissingTemplate do
-      assert_deprecated do
-        @view.render(template: "../\\../test/abstract_unit.rb")
-      end
+      @view.render(template: "../\\../test/abstract_unit.rb")
+    end
+  end
+
+  if RUBY_VERSION >= "3.2"
+    def test_render_runtime_error
+      ex = assert_raises(ActionView::Template::Error) {
+        @view.render(template: "test/runtime_error")
+      }
+      erb_btl = ex.backtrace_locations.first
+
+      # Get the spot information from ErrorHighlight
+      translating_frame = ActionDispatch::ExceptionWrapper::SourceMapLocation.new(erb_btl, ex.template)
+      translated_spot = translating_frame.spot(ex.cause)
+
+      assert_equal 6, translated_spot[:first_column]
+    end
+
+    def test_render_location_conditional_append
+      ex = assert_raises(ActionView::Template::Error) {
+        @view.render(template: "test/unparseable_runtime_error")
+      }
+      erb_btl = ex.backtrace_locations.first
+
+      # Get the spot information from ErrorHighlight
+      translating_frame = ActionDispatch::ExceptionWrapper::SourceMapLocation.new(erb_btl, ex.template)
+      translated_spot = translating_frame.spot(ex.cause)
+
+      assert_equal 8, translated_spot[:first_column]
     end
   end
 
@@ -309,7 +335,7 @@ module RenderTestCases
   end
 
   def test_render_template_with_errors
-    e = assert_raises(ActionView::Template::Error) { assert_deprecated { @view.render(template: "test/_raise") } }
+    e = assert_raises(ActionView::Template::Error) { @view.render(template: "test/_raise") }
     assert_match %r!method.*doesnt_exist!, e.message
     assert_equal "", e.sub_template_message
     assert_equal "1", e.line_number
@@ -327,7 +353,7 @@ module RenderTestCases
 
   def test_undefined_method_error_references_named_class
     e = assert_raises(ActionView::Template::Error) { @view.render(inline: "<%= undefined %>") }
-    assert_match(/`undefined' for #<ActionView::Base:0x[0-9a-f]+>/, e.message)
+    assert_match(/undefined local variable or method `undefined'/, e.message)
   end
 
   def test_render_renderable_object
@@ -512,7 +538,7 @@ module RenderTestCases
   end
 
   def test_optional_second_arg_works_without_deprecation
-    assert_not_deprecated do
+    assert_not_deprecated(ActionView.deprecator) do
       ActionView::Template.register_template_handler :ruby_handler, ->(view, source = nil) { source }
     end
     assert_equal "3", @view.render(inline: "(1 + 2).to_s", type: :ruby_handler)
@@ -563,9 +589,7 @@ module RenderTestCases
     %w(malformed malformed.erb malformed.html.erb malformed.en.html.erb).each do |name|
       assert File.exist?(File.expand_path("#{FIXTURE_LOAD_PATH}/test/malformed/#{name}~")), "Malformed file (#{name}~) which should be ignored does not exists"
       assert_raises(ActionView::MissingTemplate) do
-        ActiveSupport::Deprecation.silence do
-          @view.render(template: "test/malformed/#{name}")
-        end
+        @view.render(template: "test/malformed/#{name}")
       end
     end
   end
@@ -642,32 +666,55 @@ module RenderTestCases
 
   def test_render_partial_provides_spellcheck
     e = assert_raises(ActionView::MissingTemplate) { @view.render(partial: "test/partail") }
-    assert_match %r{Did you mean\?  test/partial\n *test/partialhtml}, e.message
+    if e.respond_to?(:detailed_message)
+      assert_match %r{Did you mean\?  test/partial\e\[m\n\e\[1m *test/partialhtml}, e.detailed_message
+    else
+      assert_match %r{Did you mean\?  test/partial\n *test/partialhtml}, e.message
+    end
   end
 
   def test_spellcheck_doesnt_list_directories
     e = assert_raises(ActionView::MissingTemplate) { @view.render(partial: "test/directory") }
-    assert_match %r{Did you mean\?}, e.message
-    assert_no_match %r{Did you mean\?  test/directory\n}, e.message # test/hello is a directory
+    if e.respond_to?(:detailed_message)
+      assert_match %r{Did you mean\?}, e.detailed_message
+      assert_no_match %r{Did you mean\?  test/directory\n}, e.detailed_message # test/hello is a directory
+    else
+      assert_match %r{Did you mean\?}, e.message
+      assert_no_match %r{Did you mean\?  test/directory\n}, e.message # test/hello is a directory
+    end
   end
 
   def test_spellcheck_only_lists_templates
     e = assert_raises(ActionView::MissingTemplate) { @view.render(template: "test/partial") }
 
-    assert_match %r{Did you mean\?}, e.message
-    assert_no_match %r{Did you mean\?  test/partial\n}, e.message
+    if e.respond_to?(:detailed_message)
+      assert_match %r{Did you mean\?}, e.detailed_message
+      assert_no_match %r{Did you mean\?  test/partial\n}, e.detailed_message
+    else
+      assert_match %r{Did you mean\?}, e.message
+      assert_no_match %r{Did you mean\?  test/partial\n}, e.message
+    end
   end
 
   def test_spellcheck_only_lists_partials
     e = assert_raises(ActionView::MissingTemplate) { @view.render(partial: "test/template") }
 
-    assert_match %r{Did you mean\?}, e.message
-    assert_no_match %r{Did you mean\?  test/template\n}, e.message
+    if e.respond_to?(:detailed_message)
+      assert_match %r{Did you mean\?}, e.detailed_message
+      assert_no_match %r{Did you mean\?  test/template\n}, e.detailed_message
+    else
+      assert_match %r{Did you mean\?}, e.message
+      assert_no_match %r{Did you mean\?  test/template\n}, e.message
+    end
   end
 
   def test_render_partial_wrong_details_no_spellcheck
     e = assert_raises(ActionView::MissingTemplate) { @view.render(partial: "test/partial_with_only_html_version", formats: [:xml]) }
-    assert_no_match %r{Did you mean\?}, e.message
+    if e.respond_to?(:detailed_message)
+      assert_no_match %r{Did you mean\?}, e.detailed_message
+    else
+      assert_no_match %r{Did you mean\?}, e.message
+    end
   end
 
   def test_render_with_nested_layout
@@ -712,6 +759,8 @@ class FrozenStringLiteralEnabledViewRenderTest < ActiveSupport::TestCase
   include RenderTestCases
 
   def setup
+    ActionView::LookupContext::DetailsKey.clear
+
     @previous_frozen_literal = ActionView::Template.frozen_string_literal
     ActionView::Template.frozen_string_literal = true
     view_paths = ActionController::Base.view_paths
@@ -908,6 +957,12 @@ class CachedCollectionViewRenderTest < ActiveSupport::TestCase
     assert_raises(NotImplementedError) do
       @controller_view.render(partial: [a, b], cached: true)
     end
+  end
+
+  test "collection caching with empty collection and logger with level debug" do
+    ActionView::PartialRenderer.collection_cache.logger = Logger.new(nil, level: :debug)
+
+    assert_nil @view.render(partial: "test/cached_customer", collection: [], cached: true)
   end
 
   test "collection caching with repeated collection" do

@@ -1,10 +1,12 @@
 # frozen_string_literal: true
 
+require "openssl"
+
 module ActiveRecord
   module Encryption
     # Container of configuration options
     class Config
-      attr_accessor :primary_key, :deterministic_key, :store_key_references, :key_derivation_salt,
+      attr_accessor :primary_key, :deterministic_key, :store_key_references, :key_derivation_salt, :hash_digest_class,
                     :support_unencrypted_data, :encrypt_fixtures, :validate_column_size, :add_to_filter_parameters,
                     :excluded_from_filter_parameters, :extend_queries, :previous_schemes, :forced_encoding_for_deterministic_encryption
 
@@ -21,6 +23,14 @@ module ActiveRecord
         end
       end
 
+      %w(key_derivation_salt primary_key deterministic_key).each do |key|
+        silence_redefinition_of_method key
+        define_method(key) do
+          instance_variable_get(:"@#{key}").presence or
+            raise Errors::Configuration, "Missing Active Record encryption credential: active_record_encryption.#{key}"
+        end
+      end
+
       private
         def set_defaults
           self.store_key_references = false
@@ -31,6 +41,7 @@ module ActiveRecord
           self.excluded_from_filter_parameters = []
           self.previous_schemes = []
           self.forced_encoding_for_deterministic_encryption = Encoding::UTF_8
+          self.hash_digest_class = OpenSSL::Digest::SHA1
 
           # TODO: Setting to false for now as the implementation is a bit experimental
           self.extend_queries = false

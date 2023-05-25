@@ -273,6 +273,11 @@ module ActiveRecord
     end
 
     private
+      def init_internals
+        super
+        @_already_called = nil
+      end
+
       # Returns the record for an association collection that should be validated
       # or saved. If +autosave+ is +false+ only new records will be returned,
       # unless the parent is/was a new record itself.
@@ -446,7 +451,7 @@ module ActiveRecord
           elsif autosave != false
             key = reflection.options[:primary_key] ? public_send(reflection.options[:primary_key]) : id
 
-            if (autosave && record.changed_for_autosave?) || record_changed?(reflection, record, key)
+            if (autosave && record.changed_for_autosave?) || _record_changed?(reflection, record, key)
               unless reflection.through_reflection
                 record[reflection.foreign_key] = key
                 association.set_inverse_instance(record)
@@ -461,9 +466,10 @@ module ActiveRecord
       end
 
       # If the record is new or it has changed, returns true.
-      def record_changed?(reflection, record, key)
+      def _record_changed?(reflection, record, key)
         record.new_record? ||
-          association_foreign_key_changed?(reflection, record, key) ||
+          (association_foreign_key_changed?(reflection, record, key) ||
+          inverse_polymorphic_association_changed?(reflection, record)) ||
           record.will_save_change_to_attribute?(reflection.foreign_key)
       end
 
@@ -471,6 +477,14 @@ module ActiveRecord
         return false if reflection.through_reflection?
 
         record._has_attribute?(reflection.foreign_key) && record._read_attribute(reflection.foreign_key) != key
+      end
+
+      def inverse_polymorphic_association_changed?(reflection, record)
+        return false unless reflection.inverse_of&.polymorphic?
+
+        class_name = record._read_attribute(reflection.inverse_of.foreign_type)
+
+        reflection.active_record != record.class.polymorphic_class_for(class_name)
       end
 
       # Saves the associated record if it's new or <tt>:autosave</tt> is enabled.
@@ -491,13 +505,29 @@ module ActiveRecord
             saved = record.save(validate: !autosave) if record.new_record? || (autosave && record.changed_for_autosave?)
 
             if association.updated?
-              association_id = record.public_send(reflection.options[:primary_key] || :id)
-              self[reflection.foreign_key] = association_id
+              primary_key = Array(compute_primary_key(reflection, record)).map(&:to_s)
+              foreign_key = Array(reflection.foreign_key)
+
+              primary_key_foreign_key_pairs = primary_key.zip(foreign_key)
+              primary_key_foreign_key_pairs.each do |primary_key, foreign_key|
+                association_id = record._read_attribute(primary_key)
+                self[foreign_key] = association_id unless self[foreign_key] == association_id
+              end
               association.loaded!
             end
 
             saved if autosave
           end
+        end
+      end
+
+      def compute_primary_key(reflection, record)
+        if primary_key_options = reflection.options[:primary_key]
+          primary_key_options
+        elsif reflection.options[:query_constraints] && (query_constraints = record.class.query_constraints_list)
+          query_constraints
+        else
+          record.class.primary_key
         end
       end
 

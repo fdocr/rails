@@ -168,7 +168,7 @@ class RelationMergingTest < ActiveRecord::TestCase
 
     only_david = Author.where("#{author_id} IN (?)", david)
 
-    if current_adapter?(:Mysql2Adapter)
+    if current_adapter?(:Mysql2Adapter, :TrilogyAdapter)
       assert_sql(/WHERE \(#{Regexp.escape(author_id)} IN \('1'\)\)\z/) do
         assert_equal [david], only_david.merge(only_david)
       end
@@ -392,5 +392,34 @@ class MergingDifferentRelationsTest < ActiveRecord::TestCase
     comment_2.ratings.create!
 
     assert_equal dev.ratings, [rating_1]
+  end
+
+  if ActiveRecord::Base.connection.supports_common_table_expressions?
+    test "merging relation with common table expression" do
+      posts_with_tags = Post.with(posts_with_tags: Post.where("tags_count > 0")).from("posts_with_tags AS posts")
+      posts_with_comments = Post.where("legacy_comments_count > 0")
+      relation = posts_with_comments.merge(posts_with_tags).order("posts.id")
+
+      assert_equal [1, 2, 7], relation.pluck(:id)
+    end
+
+    test "merging multiple relations with common table expression" do
+      posts_with_tags = Post.with(posts_with_tags: Post.where("tags_count > 0"))
+      posts_with_comments = Post.with(posts_with_comments: Post.where("legacy_comments_count > 0"))
+      relation = posts_with_comments.merge(posts_with_tags)
+        .joins("JOIN posts_with_tags pwt ON pwt.id = posts.id JOIN posts_with_comments pwc ON pwc.id = posts.id").order("posts.id")
+
+      assert_equal [1, 2, 7], relation.pluck(:id)
+    end
+
+    test "relation merger leaves to database to decide what to do when multiple CTEs with same alias are passed" do
+      posts_with_tags = Post.with(popular_posts: Post.where("tags_count > 0"))
+      posts_with_comments = Post.with(popular_posts: Post.where("legacy_comments_count > 0"))
+      relation = posts_with_tags.merge(posts_with_comments).joins("JOIN popular_posts pp ON pp.id = posts.id")
+
+      assert_raises ActiveRecord::StatementInvalid do
+        relation.load
+      end
+    end
   end
 end

@@ -2,6 +2,7 @@
 
 require "active_record/connection_adapters/abstract_adapter"
 require "active_record/connection_adapters/statement_pool"
+require "active_record/connection_adapters/sqlite3/column"
 require "active_record/connection_adapters/sqlite3/explain_pretty_printer"
 require "active_record/connection_adapters/sqlite3/quoting"
 require "active_record/connection_adapters/sqlite3/database_statements"
@@ -15,39 +16,18 @@ require "sqlite3"
 
 module ActiveRecord
   module ConnectionHandling # :nodoc:
+    def sqlite3_adapter_class
+      ConnectionAdapters::SQLite3Adapter
+    end
+
     def sqlite3_connection(config)
-      config = config.symbolize_keys
-
-      # Require database.
-      unless config[:database]
-        raise ArgumentError, "No database file specified. Missing argument: database"
-      end
-
-      # Allow database path relative to Rails.root, but only if the database
-      # path is not the special path that tells sqlite to build a database only
-      # in memory.
-      if ":memory:" != config[:database] && !config[:database].to_s.start_with?("file:")
-        config[:database] = File.expand_path(config[:database], Rails.root) if defined?(Rails.root)
-        dirname = File.dirname(config[:database])
-        Dir.mkdir(dirname) unless File.directory?(dirname)
-      end
-
-      db = SQLite3::Database.new(
-        config[:database].to_s,
-        config.merge(results_as_hash: true)
-      )
-
-      ConnectionAdapters::SQLite3Adapter.new(db, logger, nil, config)
-    rescue Errno::ENOENT => error
-      if error.message.include?("No such file or directory")
-        raise ActiveRecord::NoDatabaseError
-      else
-        raise
-      end
+      sqlite3_adapter_class.new(config)
     end
   end
 
   module ConnectionAdapters # :nodoc:
+    # = Active Record SQLite3 Adapter
+    #
     # The SQLite3 adapter works with the sqlite3-ruby drivers
     # (available as gem from https://rubygems.org/gems/sqlite3).
     #
@@ -57,9 +37,41 @@ module ActiveRecord
     class SQLite3Adapter < AbstractAdapter
       ADAPTER_NAME = "SQLite"
 
+      class << self
+        def new_client(config)
+          ::SQLite3::Database.new(config[:database].to_s, config)
+        rescue Errno::ENOENT => error
+          if error.message.include?("No such file or directory")
+            raise ActiveRecord::NoDatabaseError
+          else
+            raise
+          end
+        end
+
+        def dbconsole(config, options = {})
+          args = []
+
+          args << "-#{options[:mode]}" if options[:mode]
+          args << "-header" if options[:header]
+          args << File.expand_path(config.database, Rails.respond_to?(:root) ? Rails.root : nil)
+
+          find_cmd_and_exec("sqlite3", *args)
+        end
+      end
+
       include SQLite3::Quoting
       include SQLite3::SchemaStatements
       include SQLite3::DatabaseStatements
+
+      ##
+      # :singleton-method:
+      # Configure the SQLite3Adapter to be used in a strict strings mode.
+      # This will disable double-quoted string literals, because otherwise typos can silently go unnoticed.
+      # For example, it is possible to create an index for a non existing column.
+      # If you wish to enable this mode you can add the following line to your application.rb file:
+      #
+      #   config.active_record.sqlite3_adapter_strict_strings_by_default = true
+      class_attribute :strict_strings_by_default, default: false
 
       NATIVE_DATABASE_TYPES = {
         primary_key:  "integer PRIMARY KEY AUTOINCREMENT NOT NULL",
@@ -77,26 +89,47 @@ module ActiveRecord
       }
 
       class StatementPool < ConnectionAdapters::StatementPool # :nodoc:
+        alias reset clear
+
         private
           def dealloc(stmt)
             stmt.close unless stmt.closed?
           end
       end
 
-      def initialize(connection, logger, connection_options, config)
-        @memory_database = config[:database] == ":memory:"
-        super(connection, logger, config)
-        configure_connection
+      def initialize(...)
+        super
+
+        @memory_database = false
+        case @config[:database].to_s
+        when ""
+          raise ArgumentError, "No database file specified. Missing argument: database"
+        when ":memory:"
+          @memory_database = true
+        when /\Afile:/
+        else
+          # Otherwise we have a path relative to Rails.root
+          @config[:database] = File.expand_path(@config[:database], Rails.root) if defined?(Rails.root)
+          dirname = File.dirname(@config[:database])
+          unless File.directory?(dirname)
+            begin
+              Dir.mkdir(dirname)
+            rescue Errno::ENOENT => error
+              if error.message.include?("No such file or directory")
+                raise ActiveRecord::NoDatabaseError
+              else
+                raise
+              end
+            end
+          end
+        end
+
+        @config[:strict] = ConnectionAdapters::SQLite3Adapter.strict_strings_by_default unless @config.key?(:strict)
+        @connection_parameters = @config.merge(database: @config[:database].to_s, results_as_hash: true)
       end
 
-      def self.database_exists?(config)
-        config = config.symbolize_keys
-        if config[:database] == ":memory:"
-          true
-        else
-          database_file = defined?(Rails.root) ? File.expand_path(config[:database], Rails.root) : config[:database]
-          File.exist?(database_file)
-        end
+      def database_exists?
+        @config[:database] == ":memory:" || File.exist?(@config[:database].to_s)
       end
 
       def supports_ddl_transactions?
@@ -159,19 +192,18 @@ module ActiveRecord
       end
 
       def active?
-        !@connection.closed?
+        @raw_connection && !@raw_connection.closed?
       end
 
-      def reconnect!
-        super
-        connect if @connection.closed?
-      end
+      alias :reset! :reconnect!
 
       # Disconnects from the database if already connected. Otherwise, this
       # method does nothing.
       def disconnect!
         super
-        @connection.close rescue nil
+
+        @raw_connection&.close rescue nil
+        @raw_connection = nil
       end
 
       def supports_index_sort_order?
@@ -184,7 +216,7 @@ module ActiveRecord
 
       # Returns the current database encoding format as a string, e.g. 'UTF-8'
       def encoding
-        @connection.encoding.to_s
+        any_raw_connection.encoding.to_s
       end
 
       def supports_explain?
@@ -211,8 +243,14 @@ module ActiveRecord
         end
       end
 
-      def all_foreign_keys_valid? # :nodoc:
-        execute("PRAGMA foreign_key_check").blank?
+      def check_all_foreign_keys_valid! # :nodoc:
+        sql = "PRAGMA foreign_key_check"
+        result = execute(sql)
+
+        unless result.blank?
+          tables = result.map { |row| row["table"] }
+          raise ActiveRecord::StatementInvalid.new("Foreign key violations found: #{tables.join(", ")}", sql: sql)
+        end
       end
 
       # SCHEMA STATEMENTS ========================================
@@ -234,7 +272,8 @@ module ActiveRecord
       #
       # Example:
       #   rename_table('octopuses', 'octopi')
-      def rename_table(table_name, new_name)
+      def rename_table(table_name, new_name, **options)
+        validate_table_length!(new_name) unless options[:_uses_legacy_table_name]
         schema_cache.clear_data_source_cache!(table_name.to_s)
         schema_cache.clear_data_source_cache!(new_name.to_s)
         exec_query "ALTER TABLE #{quote_table_name(table_name)} RENAME TO #{quote_table_name(new_name)}"
@@ -277,8 +316,10 @@ module ActiveRecord
       end
 
       def change_column_null(table_name, column_name, null, default = nil) # :nodoc:
+        validate_change_column_null_argument!(null)
+
         unless null || default.nil?
-          exec_query("UPDATE #{quote_table_name(table_name)} SET #{quote_column_name(column_name)}=#{quote(default)} WHERE #{quote_column_name(column_name)} IS NULL")
+          internal_exec_query("UPDATE #{quote_table_name(table_name)} SET #{quote_column_name(column_name)}=#{quote(default)} WHERE #{quote_column_name(column_name)} IS NULL")
         end
         alter_table(table_name) do |definition|
           definition[column_name].null = null
@@ -300,13 +341,26 @@ module ActiveRecord
         rename_column_indexes(table_name, column.name, new_column_name)
       end
 
+      def add_timestamps(table_name, **options)
+        options[:null] = false if options[:null].nil?
+
+        if !options.key?(:precision)
+          options[:precision] = 6
+        end
+
+        alter_table(table_name) do |definition|
+          definition.column :created_at, :datetime, **options
+          definition.column :updated_at, :datetime, **options
+        end
+      end
+
       def add_reference(table_name, ref_name, **options) # :nodoc:
         super(table_name, ref_name, type: :integer, **options)
       end
       alias :add_belongs_to :add_reference
 
       def foreign_keys(table_name)
-        fk_info = exec_query("PRAGMA foreign_key_list(#{quote(table_name)})", "SCHEMA")
+        fk_info = internal_exec_query("PRAGMA foreign_key_list(#{quote(table_name)})", "SCHEMA")
         fk_info.map do |row|
           options = {
             column: row["from"],
@@ -341,7 +395,7 @@ module ActiveRecord
       end
 
       def get_database_version # :nodoc:
-        SQLite3Adapter::Version.new(query_value("SELECT sqlite_version(*)"))
+        SQLite3Adapter::Version.new(query_value("SELECT sqlite_version(*)", "SCHEMA"))
       end
 
       def check_version # :nodoc:
@@ -380,7 +434,7 @@ module ActiveRecord
         end
 
         def table_structure(table_name)
-          structure = exec_query("PRAGMA table_info(#{quote_table_name(table_name)})", "SCHEMA")
+          structure = internal_exec_query("PRAGMA table_info(#{quote_table_name(table_name)})", "SCHEMA")
           raise(ActiveRecord::StatementInvalid, "Could not find table '#{table_name}'") if structure.empty?
           table_structure_with_collation(table_name, structure)
         end
@@ -399,6 +453,9 @@ module ActiveRecord
           # Numeric types
           when /\A-?\d+(\.\d*)?\z/
             $&
+          # Binary columns
+          when /x'(.*)'/
+            [ $1 ].pack("H*")
           else
             # Anything else is blank or some function
             # and we can't know the value of that, so return nil.
@@ -474,12 +531,26 @@ module ActiveRecord
                  options[:rename][column.name.to_sym] ||
                  column.name) : column.name
 
-              @definition.column(column_name, column.type,
-                limit: column.limit, default: column.default,
-                precision: column.precision, scale: column.scale,
-                null: column.null, collation: column.collation,
+              if column.has_default?
+                type = lookup_cast_type_from_column(column)
+                default = type.deserialize(column.default)
+              end
+
+              column_options = {
+                limit: column.limit,
+                precision: column.precision,
+                scale: column.scale,
+                null: column.null,
+                collation: column.collation,
                 primary_key: column_name == from_primary_key
-              )
+              }
+
+              unless column.auto_increment?
+                column_options[:default] = default
+              end
+
+              column_type = column.bigint? ? :bigint : column.type
+              @definition.column(column_name, column_type, **column_options)
             end
 
             yield @definition if block_given?
@@ -527,7 +598,7 @@ module ActiveRecord
           quoted_columns = columns.map { |col| quote_column_name(col) } * ","
           quoted_from_columns = from_columns_to_copy.map { |col| quote_column_name(col) } * ","
 
-          exec_query("INSERT INTO #{quote_table_name(to)} (#{quoted_columns})
+          internal_exec_query("INSERT INTO #{quote_table_name(to)} (#{quoted_columns})
                      SELECT #{quoted_from_columns} FROM #{quote_table_name(from)}")
         end
 
@@ -549,10 +620,12 @@ module ActiveRecord
           end
         end
 
-        COLLATE_REGEX = /.*"(\w+)".*collate\s+"(\w+)".*/i.freeze
+        COLLATE_REGEX = /.*"(\w+)".*collate\s+"(\w+)".*/i
+        PRIMARY_KEY_AUTOINCREMENT_REGEX = /.*"(\w+)".+PRIMARY KEY AUTOINCREMENT/i
 
         def table_structure_with_collation(table_name, basic_structure)
           collation_hash = {}
+          auto_increments = {}
           sql = <<~SQL
             SELECT sql FROM
               (SELECT * FROM sqlite_master UNION ALL
@@ -574,6 +647,7 @@ module ActiveRecord
               # This regex will match the column name and collation type and will save
               # the value in $1 and $2 respectively.
               collation_hash[$1] = $2 if COLLATE_REGEX =~ column_string
+              auto_increments[$1] = true if PRIMARY_KEY_AUTOINCREMENT_REGEX =~ column_string
             end
 
             basic_structure.map do |column|
@@ -581,6 +655,10 @@ module ActiveRecord
 
               if collation_hash.has_key? column_name
                 column["collation"] = collation_hash[column_name]
+              end
+
+              if auto_increments.has_key?(column_name)
+                column["auto_increment"] = true
               end
 
               column
@@ -599,17 +677,21 @@ module ActiveRecord
         end
 
         def connect
-          @connection = ::SQLite3::Database.new(
-            @config[:database].to_s,
-            @config.merge(results_as_hash: true)
-          )
-          configure_connection
+          @raw_connection = self.class.new_client(@connection_parameters)
+        end
+
+        def reconnect
+          if active?
+            @raw_connection.rollback rescue nil
+          else
+            connect
+          end
         end
 
         def configure_connection
-          @connection.busy_timeout(self.class.type_cast_config_to_integer(@config[:timeout])) if @config[:timeout]
+          @raw_connection.busy_timeout(self.class.type_cast_config_to_integer(@config[:timeout])) if @config[:timeout]
 
-          execute("PRAGMA foreign_keys = ON", "SCHEMA")
+          raw_execute("PRAGMA foreign_keys = ON", "SCHEMA")
         end
     end
     ActiveSupport.run_load_hooks(:active_record_sqlite3adapter, SQLite3Adapter)

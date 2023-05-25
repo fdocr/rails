@@ -97,8 +97,6 @@ class String
   #   'active_record/errors'.camelize         # => "ActiveRecord::Errors"
   #   'active_record/errors'.camelize(:lower) # => "activeRecord::Errors"
   #
-  # +camelize+ is also aliased as +camelcase+.
-  #
   # See ActiveSupport::Inflector.camelize.
   def camelize(first_letter = :upper)
     case first_letter
@@ -123,8 +121,6 @@ class String
   #   'man from the boondocks'.titleize                       # => "Man From The Boondocks"
   #   'x-men: the last stand'.titleize                        # => "X Men: The Last Stand"
   #   'string_ending_with_id'.titleize(keep_id_suffix: true)  # => "String Ending With Id"
-  #
-  # +titleize+ is also aliased as +titlecase+.
   #
   # See ActiveSupport::Inflector.titleize.
   def titleize(keep_id_suffix: false)
@@ -244,7 +240,7 @@ class String
     ActiveSupport::Inflector.classify(self)
   end
 
-  # Capitalizes the first word, turns underscores into spaces, and (by default)strips a
+  # Capitalizes the first word, turns underscores into spaces, and (by default) strips a
   # trailing '_id' if present.
   # Like +titleize+, this is meant for creating pretty output.
   #
@@ -267,7 +263,7 @@ class String
     ActiveSupport::Inflector.humanize(self, capitalize: capitalize, keep_id_suffix: keep_id_suffix)
   end
 
-  # Converts just the first character to uppercase.
+  # Converts the first character to uppercase.
   #
   #   'what a Lovely Day'.upcase_first # => "What a Lovely Day"
   #   'w'.upcase_first                 # => "W"
@@ -276,6 +272,17 @@ class String
   # See ActiveSupport::Inflector.upcase_first.
   def upcase_first
     ActiveSupport::Inflector.upcase_first(self)
+  end
+
+  # Converts the first character to lowercase.
+  #
+  #   'If they enjoyed The Matrix'.downcase_first # => "if they enjoyed The Matrix"
+  #   'I'.downcase_first                          # => "i"
+  #   ''.downcase_first                           # => ""
+  #
+  # See ActiveSupport::Inflector.downcase_first.
+  def downcase_first
+    ActiveSupport::Inflector.downcase_first(self)
   end
 
   # Creates a foreign key name from a class name.

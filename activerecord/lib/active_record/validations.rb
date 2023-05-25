@@ -30,10 +30,12 @@ module ActiveRecord
 
   # = Active Record \Validations
   #
-  # Active Record includes the majority of its validations from ActiveModel::Validations
-  # all of which accept the <tt>:on</tt> argument to define the context where the
-  # validations are active. Active Record will always supply either the context of
-  # <tt>:create</tt> or <tt>:update</tt> dependent on whether the model is a
+  # Active Record includes the majority of its validations from ActiveModel::Validations.
+  #
+  # In Active Record, all validations are performed on save by default.
+  # Validations accept the <tt>:on</tt> argument to define the context where
+  # the validations are active. Active Record will pass either the context of
+  # <tt>:create</tt> or <tt>:update</tt> depending on whether the model is a
   # {new_record?}[rdoc-ref:Persistence#new_record?].
   module Validations
     extend ActiveSupport::Concern
@@ -60,6 +62,8 @@ module ActiveRecord
     #
     # If the argument is +false+ (default is +nil+), the context is set to <tt>:create</tt> if
     # {new_record?}[rdoc-ref:Persistence#new_record?] is +true+, and to <tt>:update</tt> if it is not.
+    # If the argument is an array of contexts, <tt>post.valid?([:create, :update])</tt>, the validations are
+    # run within multiple contexts.
     #
     # \Validations with no <tt>:on</tt> option will run no matter the context. \Validations with
     # some <tt>:on</tt> option will only run in the specified context.

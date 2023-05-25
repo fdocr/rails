@@ -13,8 +13,7 @@ module ActiveRecord
     ##
     # :singleton-method:
     # A list of tables which should not be dumped to the schema.
-    # Acceptable values are strings as well as regexp if ActiveRecord.schema_format == :ruby.
-    # Only strings are accepted if ActiveRecord.schema_format == :sql.
+    # Acceptable values are strings and regexps.
     cattr_accessor :ignore_tables, default: []
 
     ##
@@ -28,6 +27,18 @@ module ActiveRecord
     # Specify a custom regular expression matching check constraints which name
     # should not be dumped to db/schema.rb.
     cattr_accessor :chk_ignore_pattern, default: /^chk_rails_[0-9a-f]{10}$/
+
+    ##
+    # :singleton-method:
+    # Specify a custom regular expression matching exclusion constraints which name
+    # should not be dumped to db/schema.rb.
+    cattr_accessor :excl_ignore_pattern, default: /^excl_rails_[0-9a-f]{10}$/
+
+    ##
+    # :singleton-method:
+    # Specify a custom regular expression matching unique constraints which name
+    # should not be dumped to db/schema.rb.
+    cattr_accessor :unique_ignore_pattern, default: /^uniq_rails_[0-9a-f]{10}$/
 
     class << self
       def dump(connection = ActiveRecord::Base.connection, stream = STDOUT, config = ActiveRecord::Base)
@@ -60,6 +71,11 @@ module ActiveRecord
         @connection = connection
         @version = connection.migration_context.current_version rescue nil
         @options = options
+        @ignore_tables = [
+          ActiveRecord::Base.schema_migrations_table_name,
+          ActiveRecord::Base.internal_metadata_table_name,
+          self.class.ignore_tables
+        ].flatten
       end
 
       # turns 20170404131909 into "2017_04_04_131909"
@@ -74,22 +90,21 @@ module ActiveRecord
       end
 
       def header(stream)
-        stream.puts <<HEADER
-# This file is auto-generated from the current state of the database. Instead
-# of editing this file, please use the migrations feature of Active Record to
-# incrementally modify your database, and then regenerate this schema definition.
-#
-# This file is the source Rails uses to define your schema when running `bin/rails
-# db:schema:load`. When creating a new database, `bin/rails db:schema:load` tends to
-# be faster and is potentially less error prone than running all of your
-# migrations from scratch. Old migrations may fail to apply correctly if those
-# migrations use external dependencies or application code.
-#
-# It's strongly recommended that you check this file into your version control system.
+        stream.puts <<~HEADER
+          # This file is auto-generated from the current state of the database. Instead
+          # of editing this file, please use the migrations feature of Active Record to
+          # incrementally modify your database, and then regenerate this schema definition.
+          #
+          # This file is the source Rails uses to define your schema when running `bin/rails
+          # db:schema:load`. When creating a new database, `bin/rails db:schema:load` tends to
+          # be faster and is potentially less error prone than running all of your
+          # migrations from scratch. Old migrations may fail to apply correctly if those
+          # migrations use external dependencies or application code.
+          #
+          # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema.define(#{define_params}) do
-
-HEADER
+          ActiveRecord::Schema[#{ActiveRecord::Migration.current_version}].define(#{define_params}) do
+        HEADER
       end
 
       def trailer(stream)
@@ -112,7 +127,7 @@ HEADER
         end
 
         # dump foreign keys at the end to make sure all dependent tables exist.
-        if @connection.supports_foreign_keys?
+        if @connection.use_foreign_keys?
           sorted_tables.each do |tbl|
             foreign_keys(tbl, stream) unless ignored?(tbl)
           end
@@ -172,12 +187,13 @@ HEADER
 
           indexes_in_create(table, tbl)
           check_constraints_in_create(table, tbl) if @connection.supports_check_constraints?
+          exclusion_constraints_in_create(table, tbl) if @connection.supports_exclusion_constraints?
+          unique_keys_in_create(table, tbl) if @connection.supports_unique_keys?
 
           tbl.puts "  end"
           tbl.puts
 
-          tbl.rewind
-          stream.print tbl.read
+          stream.print tbl.string
         rescue => e
           stream.puts "# Could not dump table #{table.inspect} because of following #{e.class}"
           stream.puts "#   #{e.message}"
@@ -202,6 +218,18 @@ HEADER
 
       def indexes_in_create(table, stream)
         if (indexes = @connection.indexes(table)).any?
+          if @connection.supports_exclusion_constraints? && (exclusion_constraints = @connection.exclusion_constraints(table)).any?
+            exclusion_constraint_names = exclusion_constraints.collect(&:name)
+
+            indexes = indexes.reject { |index| exclusion_constraint_names.include?(index.name) }
+          end
+
+          if @connection.supports_unique_keys? && (unique_keys = @connection.unique_keys(table)).any?
+            unique_key_names = unique_keys.collect(&:name)
+
+            indexes = indexes.reject { |index| unique_key_names.include?(index.name) }
+          end
+
           index_statements = indexes.map do |index|
             "    t.index #{index_parts(index).join(', ')}"
           end
@@ -220,6 +248,7 @@ HEADER
         index_parts << "opclass: #{format_index_parts(index.opclasses)}" if index.opclasses.present?
         index_parts << "where: #{index.where.inspect}" if index.where
         index_parts << "using: #{index.using.inspect}" if !@connection.default_index_type?(index)
+        index_parts << "include: #{index.include.inspect}" if index.include
         index_parts << "type: #{index.type.inspect}" if index.type
         index_parts << "comment: #{index.comment.inspect}" if index.comment
         index_parts
@@ -235,6 +264,8 @@ HEADER
             if check_constraint.export_name_on_schema_dump?
               parts << "name: #{check_constraint.name.inspect}"
             end
+
+            parts << "validate: #{check_constraint.validate?.inspect}" unless check_constraint.validate?
 
             "    #{parts.join(', ')}"
           end
@@ -266,6 +297,7 @@ HEADER
             parts << "on_update: #{foreign_key.on_update.inspect}" if foreign_key.on_update
             parts << "on_delete: #{foreign_key.on_delete.inspect}" if foreign_key.on_delete
             parts << "deferrable: #{foreign_key.deferrable.inspect}" if foreign_key.deferrable
+            parts << "validate: #{foreign_key.validate?.inspect}" unless foreign_key.validate?
 
             "  #{parts.join(', ')}"
           end
@@ -293,13 +325,17 @@ HEADER
       end
 
       def remove_prefix_and_suffix(table)
+        # This method appears at the top when profiling active_record test cases run.
+        # Avoid costly calculation when there are no prefix and suffix.
+        return table if @options[:table_name_prefix].blank? && @options[:table_name_suffix].blank?
+
         prefix = Regexp.escape(@options[:table_name_prefix].to_s)
         suffix = Regexp.escape(@options[:table_name_suffix].to_s)
         table.sub(/\A#{prefix}(.+)#{suffix}\z/, "\\1")
       end
 
       def ignored?(table_name)
-        [ActiveRecord::Base.schema_migrations_table_name, ActiveRecord::Base.internal_metadata_table_name, ignore_tables].flatten.any? do |ignored|
+        @ignore_tables.any? do |ignored|
           ignored === remove_prefix_and_suffix(table_name)
         end
       end

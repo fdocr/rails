@@ -3,17 +3,19 @@
 require "cases/helper"
 require "support/ddl_helper"
 
+require "active_support/error_reporter/test_helper"
+
 class Mysql2AdapterTest < ActiveRecord::Mysql2TestCase
   include DdlHelper
 
   def setup
     @conn = ActiveRecord::Base.connection
-    @connection_handler = ActiveRecord::Base.connection_handler
+    @original_db_warnings_action = :ignore
   end
 
   def test_connection_error
     assert_raises ActiveRecord::ConnectionNotEstablished do
-      ActiveRecord::Base.mysql2_connection(socket: File::NULL)
+      ActiveRecord::Base.mysql2_connection(socket: File::NULL, prepared_statements: false).connect!
     end
   end
 
@@ -33,7 +35,7 @@ class Mysql2AdapterTest < ActiveRecord::Mysql2TestCase
       fake_connection,
       ActiveRecord::Base.logger,
       nil,
-      { socket: File::NULL }
+      { socket: File::NULL, prepared_statements: false }
     )
     assert_raises ActiveRecord::ConnectionNotEstablished do
       @conn.reconnect!
@@ -53,7 +55,7 @@ class Mysql2AdapterTest < ActiveRecord::Mysql2TestCase
       end
     end.new
 
-    assert_deprecated do
+    assert_deprecated(ActiveRecord.deprecator) do
       ActiveRecord::ConnectionAdapters::Mysql2Adapter.new(
         fake_connection,
         ActiveRecord::Base.logger,
@@ -62,7 +64,7 @@ class Mysql2AdapterTest < ActiveRecord::Mysql2TestCase
       )
     end
 
-    assert_not_deprecated do
+    assert_not_deprecated(ActiveRecord.deprecator) do
       ActiveRecord::ConnectionAdapters::Mysql2Adapter.new(
         fake_connection,
         ActiveRecord::Base.logger,
@@ -70,6 +72,31 @@ class Mysql2AdapterTest < ActiveRecord::Mysql2TestCase
         { socket: File::NULL, prepared_statements: false }
       )
     end
+  end
+
+  def test_mysql2_default_prepared_statements
+    fake_connection = Class.new do
+      def query_options
+        {}
+      end
+
+      def query(*)
+      end
+
+      def close
+      end
+    end.new
+
+    adapter = ActiveRecord.deprecator.silence do
+      ActiveRecord::ConnectionAdapters::Mysql2Adapter.new(
+        fake_connection,
+        ActiveRecord::Base.logger,
+        nil,
+        { socket: File::NULL }
+      )
+    end
+
+    assert_equal false, adapter.prepared_statements
   end
 
   def test_exec_query_nothing_raises_with_no_result_queries
@@ -151,6 +178,33 @@ class Mysql2AdapterTest < ActiveRecord::Mysql2TestCase
     assert_not_nil error.cause
   ensure
     @conn.execute("ALTER TABLE engines DROP COLUMN old_car_id") rescue nil
+  end
+
+  def test_errors_for_multiple_fks_on_mismatched_types_for_pk_table_in_alter_table
+    skip "MariaDB does not return mismatched foreign key in error message" if @conn.mariadb?
+
+    begin
+      error = assert_raises(ActiveRecord::MismatchedForeignKey) do
+        # we should add matched foreign key first to properly test error parsing
+        @conn.add_reference :engines, :person, foreign_key: true
+
+        # table old_cars has primary key of integer
+        @conn.add_reference :engines, :old_car, foreign_key: true
+      end
+
+      assert_match(
+        %r/Column `old_car_id` on table `engines` does not match column `id` on `old_cars`, which has type `int(\(11\))?`\./,
+        error.message
+      )
+      assert_match(
+        %r/To resolve this issue, change the type of the `old_car_id` column on `engines` to be :integer\. \(For example `t.integer :old_car_id`\)\./,
+        error.message
+      )
+      assert_not_nil error.cause
+    ensure
+      @conn.remove_reference(:engines, :person)
+      @conn.remove_reference(:engines, :old_car)
+    end
   end
 
   def test_errors_for_bigint_fks_on_integer_pk_table_in_create_table
@@ -261,6 +315,134 @@ class Mysql2AdapterTest < ActiveRecord::Mysql2TestCase
         @conn.execute("SELECT 1")
       }
     end
+  end
+
+  def test_database_timezone_changes_synced_to_connection
+    with_timezone_config default: :local do
+      assert_changes(-> { @conn.raw_connection.query_options[:database_timezone] }, from: :utc, to: :local) do
+        @conn.execute("SELECT 1")
+      end
+    end
+  end
+
+  def test_ignores_warnings_when_behaviour_ignore
+    with_db_warnings_action(:ignore) do
+      result = @conn.execute('SELECT 1 + "foo"')
+      assert_equal [1], result.to_a.first
+    end
+  end
+
+  def test_logs_warnings_when_behaviour_log
+    with_db_warnings_action(:log) do
+      mysql_warning = "[ActiveRecord::SQLWarning] Truncated incorrect DOUBLE value: 'foo' (1292)"
+
+      assert_called_with(ActiveRecord::Base.logger, :warn, [mysql_warning]) do
+        @conn.execute('SELECT 1 + "foo"')
+      end
+    end
+  end
+
+  def test_raises_warnings_when_behaviour_raise
+    with_db_warnings_action(:raise) do
+      assert_raises(ActiveRecord::SQLWarning) do
+        @conn.execute('SELECT 1 + "foo"')
+      end
+    end
+  end
+
+  def test_reports_when_behaviour_report
+    with_db_warnings_action(:report) do
+      error_reporter = ActiveSupport::ErrorReporter.new
+      subscriber = ActiveSupport::ErrorReporter::TestHelper::ErrorSubscriber.new
+
+      Rails.define_singleton_method(:error) { error_reporter }
+      Rails.error.subscribe(subscriber)
+
+      @conn.execute('SELECT 1 + "foo"')
+
+      warning_event, * = subscriber.events.first
+
+      assert_kind_of ActiveRecord::SQLWarning, warning_event
+      assert_equal "Truncated incorrect DOUBLE value: 'foo'", warning_event.message
+    end
+  end
+
+  def test_warnings_behaviour_can_be_customized_with_a_proc
+    warning_code = nil
+    ActiveRecord.db_warnings_action = ->(warning) do
+      warning_code = warning.code
+    end
+
+    @conn.execute('SELECT 1 + "foo"')
+
+    assert_equal 1292, warning_code
+  ensure
+    ActiveRecord.db_warnings_action = @original_db_warnings_action
+  end
+
+  def test_allowlist_of_warnings_to_ignore
+    with_db_warnings_action(:raise, [/Truncated incorrect DOUBLE value/]) do
+      result = @conn.execute('SELECT 1 + "foo"')
+
+      assert_equal [1], result.to_a.first
+    end
+  end
+
+  def test_allowlist_of_warning_codes_to_ignore
+    with_db_warnings_action(:raise, ["1062"]) do
+      row_id = @conn.insert("INSERT INTO posts (title, body) VALUES('Title', 'Body')")
+      result = @conn.execute("INSERT IGNORE INTO posts (id, title, body) VALUES(#{row_id}, 'Title', 'Body')")
+
+      assert_nil result
+    end
+  end
+
+  def test_does_not_raise_note_level_warnings
+    with_db_warnings_action(:raise) do
+      result = @conn.execute("DROP TABLE IF EXISTS non_existent_table")
+
+      assert_equal [], result.to_a
+    end
+  end
+
+  def test_warnings_do_not_change_returned_value_of_exec_update
+    previous_logger = ActiveRecord::Base.logger
+    old_sql_mode = @conn.query_value("SELECT @@SESSION.sql_mode")
+
+    with_db_warnings_action(:log) do
+      ActiveRecord::Base.logger = ActiveSupport::Logger.new(nil)
+
+      # Mysql2 will raise an error when attempting to perform an update that warns if the sql_mode is set to strict
+      @conn.execute("SET @@SESSION.sql_mode=''")
+
+      @conn.execute("INSERT INTO posts (title, body) VALUES('Title', 'Body')")
+      result = @conn.update("UPDATE posts SET title = 'Updated' WHERE id > (0+'foo') LIMIT 1")
+
+      assert_equal 1, result
+    end
+  ensure
+    @conn.execute("SET @@SESSION.sql_mode='#{old_sql_mode}'")
+    ActiveRecord::Base.logger = previous_logger
+  end
+
+  def test_warnings_do_not_change_returned_value_of_exec_delete
+    previous_logger = ActiveRecord::Base.logger
+    old_sql_mode = @conn.query_value("SELECT @@SESSION.sql_mode")
+
+    with_db_warnings_action(:log) do
+      ActiveRecord::Base.logger = ActiveSupport::Logger.new(nil)
+
+      # Mysql2 will raise an error when attempting to perform a delete that warns if the sql_mode is set to strict
+      @conn.execute("SET @@SESSION.sql_mode=''")
+
+      @conn.execute("INSERT INTO posts (title, body) VALUES('Title', 'Body')")
+      result = @conn.delete("DELETE FROM posts WHERE id > (0+'foo') LIMIT 1")
+
+      assert_equal 1, result
+    end
+  ensure
+    @conn.execute("SET @@SESSION.sql_mode='#{old_sql_mode}'")
+    ActiveRecord::Base.logger = previous_logger
   end
 
   private

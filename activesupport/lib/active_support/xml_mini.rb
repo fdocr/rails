@@ -9,7 +9,7 @@ require "active_support/core_ext/string/inflections"
 require "active_support/core_ext/date_time/calculations"
 
 module ActiveSupport
-  # = XmlMini
+  # = \XmlMini
   #
   # To use the much faster libxml parser:
   #   gem 'libxml-ruby', '=0.9.7'
@@ -54,7 +54,7 @@ module ActiveSupport
 
     FORMATTING = {
       "symbol"   => Proc.new { |symbol| symbol.to_s },
-      "date"     => Proc.new { |date| date.to_formatted_s(:db) },
+      "date"     => Proc.new { |date| date.to_fs(:db) },
       "dateTime" => Proc.new { |time| time.xmlschema },
       "binary"   => Proc.new { |binary| ::Base64.encode64(binary) },
       "yaml"     => Proc.new { |yaml| yaml.to_yaml }

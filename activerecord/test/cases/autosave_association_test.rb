@@ -34,6 +34,12 @@ require "models/organization"
 require "models/guitar"
 require "models/tuning_peg"
 require "models/reply"
+require "models/attachment"
+require "models/translation"
+require "models/chef"
+require "models/cake_designer"
+require "models/drink_designer"
+require "models/cpk"
 
 class TestAutosaveAssociationsInGeneral < ActiveRecord::TestCase
   def test_autosave_works_even_when_other_callbacks_update_the_parent_model
@@ -524,8 +530,8 @@ class TestDefaultAutosaveAssociationOnAHasManyAssociationWithAcceptsNestedAttrib
     assert_not_predicate invalid_electron, :valid?
     assert_predicate valid_electron, :valid?
     assert_not_predicate molecule, :valid?
-    assert_equal ["can't be blank"], molecule.errors["electrons[1].name"]
-    assert_not_equal ["can't be blank"], molecule.errors["electrons.name"]
+    assert_equal ["can’t be blank"], molecule.errors["electrons[1].name"]
+    assert_not_equal ["can’t be blank"], molecule.errors["electrons.name"]
   ensure
     ActiveRecord.index_nested_attribute_errors = old_attribute_config
   end
@@ -591,7 +597,7 @@ class TestDefaultAutosaveAssociationOnAHasManyAssociationWithAcceptsNestedAttrib
 end
 
 class TestDefaultAutosaveAssociationOnAHasManyAssociation < ActiveRecord::TestCase
-  fixtures :companies, :developers
+  fixtures :companies, :developers, :cpk_order_agreements, :cpk_orders, :cpk_books
 
   def test_invalid_adding
     firm = Firm.find(1)
@@ -723,6 +729,37 @@ class TestDefaultAutosaveAssociationOnAHasManyAssociation < ActiveRecord::TestCa
     firm.reload
     assert_equal 2, firm.clients.length
     assert_includes firm.clients, companies(:second_client)
+  end
+
+  def test_assign_ids_with_belongs_to_cpk_model
+    order_agreements = [cpk_order_agreements(:order_agreement_one).id, cpk_order_agreements(:order_agreement_two).id]
+    order = cpk_orders(:cpk_groceries_order_1)
+
+    assert_empty order.order_agreements
+
+    order.order_agreement_ids = order_agreements
+    order.save
+    order.reload
+
+    assert_equal order_agreements, order.order_agreement_ids
+    assert_equal 2, order.order_agreements.length
+    assert_includes order.order_agreements, cpk_order_agreements(:order_agreement_two)
+  end
+
+  def test_assign_ids_with_cpk_for_two_models
+    books = [cpk_books(:cpk_great_author_first_book).id, cpk_books(:cpk_great_author_second_book).id]
+    order = cpk_orders(:cpk_groceries_order_1)
+
+    assert_empty order.books
+
+    order.book_ids = books
+    order.save
+    order.reload
+
+    assert_equal books, order.book_ids
+    assert_equal 2, order.books.length
+    assert_includes order.books, cpk_books(:cpk_great_author_first_book)
+    assert_includes order.books, cpk_books(:cpk_great_author_second_book)
   end
 
   def test_assign_ids_for_through_a_belongs_to
@@ -1274,6 +1311,8 @@ class TestDestroyAsPartOfAutosaveAssociation < ActiveRecord::TestCase
 end
 
 class TestAutosaveAssociationOnAHasOneAssociation < ActiveRecord::TestCase
+  fixtures :chefs, :cake_designers, :drink_designers
+
   self.use_transactional_tests = false unless supports_savepoints?
 
   def setup
@@ -1332,7 +1371,7 @@ class TestAutosaveAssociationOnAHasOneAssociation < ActiveRecord::TestCase
     @pirate.ship.name   = ""
     @pirate.catchphrase = nil
     assert_predicate @pirate, :invalid?
-    assert_equal ["can't be blank", "is invalid"], @pirate.errors[:"ship.name"]
+    assert_equal ["can’t be blank", "is invalid"], @pirate.errors[:"ship.name"]
   ensure
     Ship._validators = old_validators if old_validators
     Ship._validate_callbacks = old_callbacks if old_callbacks
@@ -1414,6 +1453,34 @@ class TestAutosaveAssociationOnAHasOneAssociation < ActiveRecord::TestCase
 
     assert_not_predicate ship, :valid?
   end
+
+  def test_recognises_inverse_polymorphic_association_changes_with_same_foreign_key
+    chef_a = chefs(:gordon_ramsay)
+    chef_b = chefs(:marco_pierre_white)
+
+    cake_designer_a = cake_designers(:flora) # id: 1
+    cake_designer_a.update!(chef: chef_a)
+    cake_designer_b = cake_designers(:frosty) # id: 3
+    cake_designer_b.update!(chef: chef_b)
+
+    drink_designer_a = drink_designers(:turner) # id: 1
+    drink_designer_b = drink_designers(:sparrow) # id: 2
+
+    swap_chefs(cake_designer_b, drink_designer_b)
+    assert_predicate cake_designer_b.reload.chef, :present?
+    assert_not_predicate drink_designer_b.reload.chef, :present?
+
+    swap_chefs(cake_designer_a, drink_designer_a)
+    assert_predicate cake_designer_a.reload.chef, :present?
+    assert_not_predicate drink_designer_a.reload.chef, :present?
+  end
+
+  private
+    def swap_chefs(cake_designer, drink_designer)
+      drink_designer.chef = cake_designer.chef
+      drink_designer.save!
+      cake_designer.save!
+    end
 end
 
 class TestAutosaveAssociationOnAHasOneThroughAssociation < ActiveRecord::TestCase
@@ -1603,7 +1670,7 @@ module AutosaveAssociationOnACollectionAssociationTests
     @pirate.public_send(@association_name).each { |child| child.name = "" }
 
     assert_not_predicate @pirate, :valid?
-    assert_equal ["can't be blank"], @pirate.errors["#{@association_name}.name"]
+    assert_equal ["can’t be blank"], @pirate.errors["#{@association_name}.name"]
     assert_empty @pirate.errors[@association_name]
   end
 
@@ -1611,7 +1678,7 @@ module AutosaveAssociationOnACollectionAssociationTests
     @pirate.public_send(@association_name).build(name: "")
 
     assert_not_predicate @pirate, :valid?
-    assert_equal ["can't be blank"], @pirate.errors["#{@association_name}.name"]
+    assert_equal ["can’t be blank"], @pirate.errors["#{@association_name}.name"]
     assert_empty @pirate.errors[@association_name]
   end
 
@@ -1635,7 +1702,7 @@ module AutosaveAssociationOnACollectionAssociationTests
     @pirate.catchphrase = nil
 
     assert_not_predicate @pirate, :valid?
-    assert_equal ["can't be blank"], @pirate.errors["#{@association_name}.name"]
+    assert_equal ["can’t be blank"], @pirate.errors["#{@association_name}.name"]
     assert_predicate @pirate.errors[:catchphrase], :any?
   end
 
@@ -2006,5 +2073,16 @@ class TestAutosaveAssociationOnAHasManyAssociationDefinedInSubclassWithAcceptsNe
     valid_project.reload
 
     assert_equal "Updated", valid_project.name
+  end
+end
+
+class TestAutosaveAssociationOnABelongsToAssociationDefinedAsRecord < ActiveRecord::TestCase
+  def test_should_not_raise_error
+    translation = Translation.create(locale: "fr", key: "bread", value: "Baguette 🥖")
+    author = Author.create(name: "Dorian Marié")
+    translation.build_attachment(record: author)
+    assert_nothing_raised do
+      translation.save!
+    end
   end
 end

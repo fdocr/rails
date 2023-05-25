@@ -8,8 +8,6 @@ module ActiveRecord
     class DatabaseConfig # :nodoc:
       attr_reader :env_name, :name
 
-      attr_accessor :owner_name
-
       def initialize(env_name, name)
         @env_name = env_name
         @name = name
@@ -17,6 +15,10 @@ module ActiveRecord
 
       def adapter_method
         "#{adapter}_connection"
+      end
+
+      def adapter_class_method
+        "#{adapter}_adapter_class"
       end
 
       def host
@@ -48,6 +50,10 @@ module ActiveRecord
       end
 
       def max_queue
+        raise NotImplementedError
+      end
+
+      def query_cache
         raise NotImplementedError
       end
 

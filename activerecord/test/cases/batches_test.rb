@@ -4,9 +4,10 @@ require "cases/helper"
 require "models/comment"
 require "models/post"
 require "models/subscriber"
+require "models/cpk"
 
 class EachTest < ActiveRecord::TestCase
-  fixtures :posts, :subscribers
+  fixtures :posts, :subscribers, :cpk_orders
 
   def setup
     @posts = Post.order("id asc")
@@ -92,9 +93,14 @@ class EachTest < ActiveRecord::TestCase
   end
 
   def test_warn_if_order_scope_is_set
+    previous_logger = ActiveRecord::Base.logger
+    ActiveRecord::Base.logger = ActiveSupport::Logger.new(nil)
+
     assert_called(ActiveRecord::Base.logger, :warn) do
       Post.order("title").find_each { |post| post }
     end
+  ensure
+    ActiveRecord::Base.logger = previous_logger
   end
 
   def test_logger_not_required
@@ -169,6 +175,12 @@ class EachTest < ActiveRecord::TestCase
       Post.select(:title).find_each(batch_size: 1, order: :invalid) { |post|
         flunk "should not call this block"
       }
+    end
+  end
+
+  def test_in_batches_without_block_should_raise_if_order_is_invalid
+    assert_raise(ArgumentError) do
+      Post.select(:title).in_batches(order: :invalid)
     end
   end
 
@@ -435,6 +447,46 @@ class EachTest < ActiveRecord::TestCase
     end
   end
 
+  def test_in_batches_executes_range_queries_when_unconstrained
+    c = Post.connection
+    quoted_posts_id = Regexp.escape(c.quote_table_name("posts.id"))
+    assert_sql(/WHERE #{quoted_posts_id} > .+ AND #{quoted_posts_id} <= .+/i) do
+      Post.in_batches(of: 2) { |relation| assert_kind_of Post, relation.first }
+    end
+  end
+
+  def test_in_batches_executes_in_queries_when_unconstrained_and_opted_out_of_ranges
+    c = Post.connection
+    quoted_posts_id = Regexp.escape(c.quote_table_name("posts.id"))
+    assert_sql(/#{quoted_posts_id} IN \(.+\)/i) do
+      Post.in_batches(of: 2, use_ranges: false) { |relation| assert_kind_of Post, relation.first }
+    end
+  end
+
+  def test_in_batches_executes_in_queries_when_constrained
+    c = Post.connection
+    quoted_posts_id = Regexp.escape(c.quote_table_name("posts.id"))
+    assert_sql(/#{quoted_posts_id} IN \(.+\)/i) do
+      Post.where("id < ?", 5).in_batches(of: 2) { |relation| assert_kind_of Post, relation.first }
+    end
+  end
+
+  def test_in_batches_executes_range_queries_when_constrained_and_opted_in_into_ranges
+    c = Post.connection
+    quoted_posts_id = Regexp.escape(c.quote_table_name("posts.id"))
+    assert_sql(/#{quoted_posts_id} > .+ AND #{quoted_posts_id} <= .+/i) do
+      Post.where("id < ?", 5).in_batches(of: 2, use_ranges: true) { |relation| assert_kind_of Post, relation.first }
+    end
+  end
+
+  def test_in_batches_no_subqueries_for_whole_tables_batching
+    c = Post.connection
+    quoted_posts_id = Regexp.escape(c.quote_table_name("posts.id"))
+    assert_sql(/DELETE FROM #{c.quote_table_name("posts")} WHERE #{quoted_posts_id} > .+ AND #{quoted_posts_id} <=/i) do
+      Post.in_batches(of: 2).delete_all
+    end
+  end
+
   def test_in_batches_shouldnt_execute_query_unless_needed
     assert_queries(2) do
       Post.in_batches(of: @total) { |relation| assert_kind_of ActiveRecord::Relation, relation }
@@ -461,6 +513,24 @@ class EachTest < ActiveRecord::TestCase
       Post.in_batches(of: 1, order: :desc) do |relation|
         assert_kind_of ActiveRecord::Relation, relation
         assert_kind_of Post, relation.first
+      end
+    end
+  end
+
+  def test_in_batches_enumerator_should_quote_batch_order_with_desc_order
+    c = Post.connection
+    assert_sql(/ORDER BY #{Regexp.escape(c.quote_table_name("posts.id"))} DESC/) do
+      relation = Post.in_batches(of: 1, order: :desc).first
+      assert_kind_of ActiveRecord::Relation, relation
+      assert_kind_of Post, relation.first
+    end
+  end
+
+  def test_in_batches_enumerator_each_record_should_quote_batch_order_with_desc_order
+    c = Post.connection
+    assert_sql(/ORDER BY #{Regexp.escape(c.quote_table_name("posts.id"))} DESC/) do
+      Post.in_batches(of: 1, order: :desc).each_record do |record|
+        assert_kind_of Post, record
       end
     end
   end
@@ -699,5 +769,31 @@ class EachTest < ActiveRecord::TestCase
         end
       end
     end
+  end
+
+  test ".find_each iterates over composite primary key" do
+    orders = Cpk::Order.order(*Cpk::Order.primary_key).to_a
+    Cpk::Order.find_each(batch_size: 1).with_index do |order, index|
+      assert_equal orders[index], order
+    end
+  end
+
+  test ".in_batches should start from the start option when using composite primary key" do
+    order = Cpk::Order.second
+    relation = Cpk::Order.in_batches(of: 1, start: order.id).first
+    assert_equal order, relation.first
+  end
+
+  test ".in_batches should end at the finish option when using composite primary key" do
+    order = Cpk::Order.second_to_last
+    relation = Cpk::Order.in_batches(of: 1, finish: order.id).reverse_each.first
+    assert_equal order, relation.last
+  end
+
+  test ".in_batches with scope and using composite primary key" do
+    order1, order2 = Cpk::Order.first(2)
+    shop_id, id = order1.id
+    relation = Cpk::Order.where("shop_id > ? OR shop_id = ? AND id > ?", shop_id, shop_id, id).in_batches(of: 1).first
+    assert_equal order2, relation.first
   end
 end

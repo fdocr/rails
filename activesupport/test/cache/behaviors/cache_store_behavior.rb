@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require "active_support/core_ext/numeric/time"
+require "active_support/error_reporter/test_helper"
+
 # Tests the base functionality that should be identical across all cache stores.
 module CacheStoreBehavior
   def test_should_read_and_write_strings
@@ -39,6 +42,34 @@ module CacheStoreBehavior
     cache_miss = false
     assert_equal 10, @cache.fetch(key) { |fetch_key| cache_miss = true; fetch_key.length }
     assert_not cache_miss
+  end
+
+  def test_fetch_with_dynamic_options
+    key = SecureRandom.uuid
+    expiry = 10.minutes.from_now
+    expected_options = @cache.options.dup
+    expected_options.delete(:expires_in)
+    expected_options.merge!(
+      expires_at: expiry,
+      version: "v42",
+    )
+
+    assert_called_with(@cache, :write, [key, "bar", expected_options]) do
+      @cache.fetch(key) do |key, options|
+        assert_equal @cache.options[:expires_in], options.expires_in
+        assert_nil options.expires_at
+        assert_nil options.version
+
+        options.expires_at = expiry
+        options.version = "v42"
+
+        assert_nil options.expires_in
+        assert_equal expiry, options.expires_at
+        assert_equal "v42", options.version
+
+        "bar"
+      end
+    end
   end
 
   def test_fetch_with_forced_cache_miss
@@ -116,6 +147,10 @@ module CacheStoreBehavior
     assert_equal({ key => "bar", other_key => "baz" }, @cache.read_multi(key, other_key))
   end
 
+  def test_read_multi_empty_list
+    assert_equal({}, @cache.read_multi())
+  end
+
   def test_read_multi_with_expires
     time = Time.now
     key = SecureRandom.uuid
@@ -128,10 +163,15 @@ module CacheStoreBehavior
     end
   end
 
-  def test_read_multi_with_empty_keys_and_a_logger_and_no_namespace
-    @cache.options[:namespace] = nil
-    @cache.logger = ActiveSupport::Logger.new(nil)
-    assert_equal({}, @cache.read_multi)
+  def test_write_multi
+    key = SecureRandom.uuid
+    @cache.write_multi("#{key}1" => 1, "#{key}2" => 2)
+    assert_equal 1, @cache.read("#{key}1")
+    assert_equal 2, @cache.read("#{key}2")
+  end
+
+  def test_write_multi_empty_hash
+    assert @cache.write_multi({})
   end
 
   def test_fetch_multi
@@ -145,6 +185,10 @@ module CacheStoreBehavior
 
     assert_equal({ key => "bar", other_key => "biz", third_key => (third_key * 2) }, values)
     assert_equal((third_key * 2), @cache.read(third_key))
+  end
+
+  def test_fetch_multi_empty_hash
+    assert_equal({}, @cache.fetch_multi() { raise "Not called" })
   end
 
   def test_fetch_multi_without_expires_in
@@ -189,6 +233,36 @@ module CacheStoreBehavior
   def test_fetch_multi_without_block
     assert_raises(ArgumentError) do
       @cache.fetch_multi(SecureRandom.alphanumeric)
+    end
+  end
+
+  def test_fetch_multi_with_forced_cache_miss
+    key = SecureRandom.uuid
+    other_key = SecureRandom.uuid
+    @cache.write(key, "bar")
+
+    values = @cache.fetch_multi(key, other_key, force: true) { |value| value * 2 }
+
+    assert_equal({ key => (key * 2), other_key => (other_key * 2) }, values)
+    assert_equal(key * 2, @cache.read(key))
+    assert_equal(other_key * 2, @cache.read(other_key))
+  end
+
+  def test_fetch_multi_with_skip_nil
+    key = SecureRandom.uuid
+    other_key = SecureRandom.uuid
+
+    values = @cache.fetch_multi(key, other_key, skip_nil: true) { |k| k == key ? k : nil }
+
+    assert_equal({ key => key, other_key => nil }, values)
+    assert_equal(false, @cache.exist?(other_key))
+  end
+
+  def test_fetch_multi_uses_write_multi_entries_store_provider_interface
+    assert_called(@cache, :write_multi_entries) do
+      @cache.fetch_multi "a", "b", "c" do |key|
+        key * 2
+      end
     end
   end
 
@@ -406,9 +480,25 @@ module CacheStoreBehavior
   end
 
   def test_keys_are_case_sensitive
-    key = SecureRandom.alphanumeric
+    key = "case_sensitive_key"
     @cache.write(key, "bar")
     assert_nil @cache.read(key.upcase)
+  end
+
+  def test_blank_key
+    invalid_keys = [nil, "", [], {}]
+    invalid_keys.each do |key|
+      assert_raises(ArgumentError) { @cache.write(key, "bar") }
+      assert_raises(ArgumentError) { @cache.read(key) }
+      assert_raises(ArgumentError) { @cache.delete(key) }
+    end
+
+    valid_keys = ["foo", ["bar"], { foo: "bar" }, 0, 1, InstanceTest.new("foo", 2)]
+    valid_keys.each do |key|
+      assert_nothing_raised { @cache.write(key, "bar") }
+      assert_nothing_raised { @cache.read(key) }
+      assert_nothing_raised { @cache.delete(key) }
+    end
   end
 
   def test_exist
@@ -442,6 +532,10 @@ module CacheStoreBehavior
     assert_equal 2, @cache.delete_multi([key, SecureRandom.uuid, other_key])
     assert_not @cache.exist?(key)
     assert_not @cache.exist?(other_key)
+  end
+
+  def test_delete_multi_empty_list
+    assert_equal(0, @cache.delete_multi([]))
   end
 
   def test_original_store_objects_should_not_be_immutable
@@ -534,6 +628,51 @@ module CacheStoreBehavior
     end
   end
 
+  def test_expires_in_and_expires_at
+    key = SecureRandom.uuid
+    error = assert_raises(ArgumentError) do
+      @cache.write(key, "bar", expire_in: 60, expires_at: 1.minute.from_now)
+    end
+    assert_equal "Either :expires_in or :expires_at can be supplied, but not both", error.message
+  end
+
+  def test_invalid_expiration_time_raises_an_error_when_raise_on_invalid_cache_expiration_time_is_true
+    with_raise_on_invalid_cache_expiration_time(true) do
+      key = SecureRandom.uuid
+      error = assert_raises(ArgumentError) do
+        @cache.write(key, "bar", expires_in: -60)
+      end
+      assert_equal "Cache expiration time is invalid, cannot be negative: -60", error.message
+      assert_nil @cache.read(key)
+    end
+  end
+
+  def test_invalid_expiration_time_reports_and_logs_when_raise_on_invalid_cache_expiration_time_is_false
+    with_raise_on_invalid_cache_expiration_time(false) do
+      error_message = "Cache expiration time is invalid, cannot be negative: -60"
+      report = assert_error_reported(ArgumentError) do
+        logs = capture_logs do
+          key = SecureRandom.uuid
+          @cache.write(key, "bar", expires_in: -60)
+          assert_equal "bar", @cache.read(key)
+        end
+        assert_includes logs, "ArgumentError: #{error_message}"
+      end
+      assert_includes report.error.message, error_message
+    end
+  end
+
+  def test_expires_in_from_now_raises_an_error
+    time = 1.minute.from_now
+
+    key = SecureRandom.uuid
+    error = assert_raises(ArgumentError) do
+      @cache.write(key, "bar", expires_in: time)
+    end
+    assert_equal "expires_in parameter should not be a Time. Did you mean to use expires_at? Got: #{time}", error.message
+    assert_nil @cache.read(key)
+  end
+
   def test_race_condition_protection_skipped_if_not_defined
     key = SecureRandom.alphanumeric
     @cache.write(key, "bar")
@@ -590,6 +729,22 @@ module CacheStoreBehavior
         "baz"
       end
       assert_equal "baz", result
+    end
+  end
+
+  def test_fetch_multi_race_condition_protection
+    time = Time.now
+    key = SecureRandom.uuid
+    other_key = SecureRandom.uuid
+    @cache.write(key, "foo", expires_in: 60)
+    @cache.write(other_key, "bar", expires_in: 100)
+    Time.stub(:now, time + 71) do
+      result = @cache.fetch_multi(key, other_key, race_condition_ttl: 10) do
+        assert_nil @cache.read(key)
+        assert_equal "bar", @cache.read(other_key)
+        "baz"
+      end
+      assert_equal({ key => "baz", other_key => "bar" }, result)
     end
   end
 
@@ -684,6 +839,27 @@ module CacheStoreBehavior
         assert_operator actual_size, :<, uncompressed_size, "value should be compressed"
       else
         assert_equal uncompressed_size, actual_size, "value should not be compressed"
+      end
+    end
+
+    def with_raise_on_invalid_cache_expiration_time(new_value, &block)
+      old_value = ActiveSupport::Cache::Store.raise_on_invalid_cache_expiration_time
+      ActiveSupport::Cache::Store.raise_on_invalid_cache_expiration_time = new_value
+
+      yield
+    ensure
+      ActiveSupport::Cache::Store.raise_on_invalid_cache_expiration_time = old_value
+    end
+
+    def capture_logs(&block)
+      old_logger = ActiveSupport::Cache::Store.logger
+      log = StringIO.new
+      ActiveSupport::Cache::Store.logger = ActiveSupport::Logger.new(log)
+      begin
+        yield
+        log.string
+      ensure
+        ActiveSupport::Cache::Store.logger = old_logger
       end
     end
 end

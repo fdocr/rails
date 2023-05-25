@@ -9,7 +9,7 @@ require "active_model/nested_error"
 require "forwardable"
 
 module ActiveModel
-  # == Active \Model \Errors
+  # = Active \Model \Errors
   #
   # Provides error related functionalities you can include in your object
   # for handling error messages and interacting with Action View helpers.
@@ -48,9 +48,9 @@ module ActiveModel
   #
   # The last three methods are required in your object for +Errors+ to be
   # able to generate error messages correctly and also handle multiple
-  # languages. Of course, if you extend your object with <tt>ActiveModel::Translation</tt>
+  # languages. Of course, if you extend your object with ActiveModel::Translation
   # you will not need to implement the last two. Likewise, using
-  # <tt>ActiveModel::Validations</tt> will handle the validation related methods
+  # ActiveModel::Validations will handle the validation related methods
   # for you.
   #
   # The above allows you to do:
@@ -102,11 +102,14 @@ module ActiveModel
     # Copies the errors from <tt>other</tt>.
     # For copying errors but keep <tt>@base</tt> as is.
     #
-    # other - The ActiveModel::Errors instance.
+    # ==== Parameters
     #
-    # Examples
+    # * +other+ - The ActiveModel::Errors instance.
+    #
+    # ==== Examples
     #
     #   person.errors.copy!(other)
+    #
     def copy!(other) # :nodoc:
       @errors = other.errors.deep_dup
       @errors.each { |error|
@@ -114,14 +117,15 @@ module ActiveModel
       }
     end
 
-    # Imports one error
+    # Imports one error.
     # Imported errors are wrapped as a NestedError,
     # providing access to original error object.
     # If attribute or type needs to be overridden, use +override_options+.
     #
-    # override_options - Hash
-    # @option override_options [Symbol] :attribute Override the attribute the error belongs to
-    # @option override_options [Symbol] :type Override type of the error.
+    # ==== Options
+    #
+    # * +:attribute+ - Override the attribute the error belongs to.
+    # * +:type+ - Override type of the error.
     def import(error, override_options = {})
       [:attribute, :type].each do |key|
         if override_options.key?(key)
@@ -132,13 +136,16 @@ module ActiveModel
     end
 
     # Merges the errors from <tt>other</tt>,
-    # each <tt>Error</tt> wrapped as <tt>NestedError</tt>.
+    # each Error wrapped as NestedError.
     #
-    # other - The ActiveModel::Errors instance.
+    # ==== Parameters
     #
-    # Examples
+    # * +other+ - The ActiveModel::Errors instance.
+    #
+    # ==== Examples
     #
     #   person.errors.merge!(other)
+    #
     def merge!(other)
       return errors if equal?(other)
 
@@ -147,7 +154,7 @@ module ActiveModel
       }
     end
 
-    # Search for errors matching +attribute+, +type+ or +options+.
+    # Search for errors matching +attribute+, +type+, or +options+.
     #
     # Only supplied params will be matched.
     #
@@ -208,7 +215,7 @@ module ActiveModel
 
     # Returns a Hash that can be used as the JSON representation for this
     # object. You can pass the <tt>:full_messages</tt> option. This determines
-    # if the json object should contain full messages or not (false by default).
+    # if the JSON object should contain full messages or not (false by default).
     #
     #   person.errors.as_json                      # => {:name=>["cannot be nil"]}
     #   person.errors.as_json(full_messages: true) # => {:name=>["name cannot be nil"]}
@@ -278,9 +285,9 @@ module ActiveModel
     #
     #   person.errors.add(:name, :blank)
     #   person.errors.messages
-    #   # => {:name=>["can't be blank"]}
+    #   # => {:name=>["can’t be blank"]}
     #
-    #   person.errors.add(:name, :too_long, { count: 25 })
+    #   person.errors.add(:name, :too_long, count: 25)
     #   person.errors.messages
     #   # => ["is too long (maximum is 25 characters)"]
     #
@@ -326,12 +333,12 @@ module ActiveModel
     #
     #   person.errors.add :name, :blank
     #   person.errors.added? :name, :blank           # => true
-    #   person.errors.added? :name, "can't be blank" # => true
+    #   person.errors.added? :name, "can’t be blank" # => true
     #
     # If the error requires options, then it returns +true+ with
     # the correct options, or +false+ with incorrect or missing options.
     #
-    #   person.errors.add :name, :too_long, { count: 25 }
+    #   person.errors.add :name, :too_long, count: 25
     #   person.errors.added? :name, :too_long, count: 25                     # => true
     #   person.errors.added? :name, "is too long (maximum is 25 characters)" # => true
     #   person.errors.added? :name, :too_long, count: 24                     # => false
@@ -353,7 +360,7 @@ module ActiveModel
     # present, or +false+ otherwise. +type+ is treated the same as for +add+.
     #
     #   person.errors.add :age
-    #   person.errors.add :name, :too_long, { count: 25 }
+    #   person.errors.add :name, :too_long, count: 25
     #   person.errors.of_kind? :age                                            # => true
     #   person.errors.of_kind? :name                                           # => false
     #   person.errors.of_kind? :name, :too_long                                # => true
@@ -379,7 +386,7 @@ module ActiveModel
     #
     #   person = Person.create(address: '123 First St.')
     #   person.errors.full_messages
-    #   # => ["Name is too short (minimum is 5 characters)", "Name can't be blank", "Email can't be blank"]
+    #   # => ["Name is too short (minimum is 5 characters)", "Name can’t be blank", "Email can’t be blank"]
     def full_messages
       @errors.map(&:full_message)
     end
@@ -394,7 +401,7 @@ module ActiveModel
     #
     #   person = Person.create()
     #   person.errors.full_messages_for(:name)
-    #   # => ["Name is too short (minimum is 5 characters)", "Name can't be blank"]
+    #   # => ["Name is too short (minimum is 5 characters)", "Name can’t be blank"]
     def full_messages_for(attribute)
       where(attribute).map(&:full_message).freeze
     end
@@ -408,7 +415,7 @@ module ActiveModel
     #
     #   person = Person.create()
     #   person.errors.messages_for(:name)
-    #   # => ["is too short (minimum is 5 characters)", "can't be blank"]
+    #   # => ["is too short (minimum is 5 characters)", "can’t be blank"]
     def messages_for(attribute)
       where(attribute).map(&:message)
     end
@@ -427,7 +434,7 @@ module ActiveModel
     # if it's not there, it's looked up in <tt>activemodel.errors.models.MODEL.MESSAGE</tt> and if
     # that is not there also, it returns the translation of the default message
     # (e.g. <tt>activemodel.errors.messages.MESSAGE</tt>). The translated model
-    # name, translated attribute name and the value are available for
+    # name, translated attribute name, and the value are available for
     # interpolation.
     #
     # When using inheritance in your models, it will check all the inherited
@@ -465,6 +472,8 @@ module ActiveModel
       end
   end
 
+  # = Active \Model \Validator
+  #
   # Raised when a validation cannot be corrected by end users and are considered
   # exceptional.
   #
@@ -479,14 +488,18 @@ module ActiveModel
   #   person = Person.new
   #   person.name = nil
   #   person.valid?
-  #   # => ActiveModel::StrictValidationFailed: Name can't be blank
+  #   # => ActiveModel::StrictValidationFailed: Name can’t be blank
   class StrictValidationFailed < StandardError
   end
 
+  # = Active \Model \RangeError
+  #
   # Raised when attribute values are out of range.
   class RangeError < ::RangeError
   end
 
+  # = Active \Model \UnknownAttributeError
+  #
   # Raised when unknown attributes are supplied via mass assignment.
   #
   #   class Person

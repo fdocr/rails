@@ -15,6 +15,8 @@ module ActionCable
       end
     end
 
+    # = Action Cable \Channel Stub
+    #
     # Stub +stream_from+ to track streams for the channel.
     # Add public aliases for +subscription_confirmation_sent?+ and
     # +subscription_rejected?+.
@@ -45,7 +47,7 @@ module ActionCable
     end
 
     class ConnectionStub
-      attr_reader :transmissions, :identifiers, :subscriptions, :logger
+      attr_reader :transmissions, :identifiers, :subscriptions, :logger, :config
 
       def initialize(identifiers = {})
         @transmissions = []
@@ -57,6 +59,7 @@ module ActionCable
         @subscriptions = ActionCable::Connection::Subscriptions.new(self)
         @identifiers = identifiers.keys
         @logger = ActiveSupport::TaggedLogging.new ActiveSupport::Logger.new(StringIO.new)
+        @config = ActionCable::Server::Configuration.new
       end
 
       def transmit(cable_message)

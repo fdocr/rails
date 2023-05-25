@@ -64,14 +64,14 @@ module ActiveModel
       #   validates_presence_of :password_confirmation, if: :password_changed?
       #
       # Configuration options:
-      # * <tt>:message</tt> - A custom error message (default is: "doesn't match
+      # * <tt>:message</tt> - A custom error message (default is: "doesn’t match
       #   <tt>%{translated_attribute_name}</tt>").
       # * <tt>:case_sensitive</tt> - Looks for an exact match. Ignored by
       #   non-text columns (+true+ by default).
       #
       # There is also a list of default options supported by every validator:
       # +:if+, +:unless+, +:on+, +:allow_nil+, +:allow_blank+, and +:strict+.
-      # See <tt>ActiveModel::Validations#validates</tt> for more information
+      # See ActiveModel::Validations::ClassMethods#validates for more information.
       def validates_confirmation_of(*attr_names)
         validates_with ConfirmationValidator, _merge_attributes(attr_names)
       end

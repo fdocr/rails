@@ -219,7 +219,7 @@ module ApplicationTests
     test "can boot with an unhealthy database" do
       rails %w(generate model post title:string)
 
-      switch_env("DATABASE_URL", "mysql2://127.0.0.1:1") do
+      with_unhealthy_database do
         require "#{app_path}/config/environment"
       end
     end
@@ -247,7 +247,9 @@ module ApplicationTests
         config.eager_load = true
       RUBY
 
-      require "#{app_path}/config/environment"
+      silence_warnings do
+        require "#{app_path}/config/environment"
+      end
       assert_not ActiveRecord::Base.connection.schema_cache.data_sources("posts")
     end
 
@@ -259,12 +261,17 @@ module ApplicationTests
         config.eager_load = true
       RUBY
 
-      switch_env("DATABASE_URL", "mysql2://127.0.0.1:1") do
+      with_unhealthy_database do
         require "#{app_path}/config/environment"
 
-        assert_nil ActiveRecord::Base.connection_pool.schema_cache
+        assert_not_nil ActiveRecord::Base.connection_pool.schema_cache
+
         assert_raises ActiveRecord::ConnectionNotEstablished do
           ActiveRecord::Base.connection.execute("SELECT 1")
+        end
+
+        assert_raises ActiveRecord::ConnectionNotEstablished do
+          ActiveRecord::Base.connection_pool.schema_cache.columns("posts")
         end
       end
     end
@@ -291,7 +298,7 @@ module ApplicationTests
         config.active_record.check_schema_cache_dump_version = false
       RUBY
 
-      switch_env("DATABASE_URL", "mysql2://127.0.0.1:1") do
+      with_unhealthy_database do
         require "#{app_path}/config/environment"
 
         assert ActiveRecord::Base.connection_pool.schema_cache.data_sources("posts")
@@ -337,6 +344,73 @@ module ApplicationTests
       RUBY
       require "#{app_path}/config/environment"
       assert_not_predicate ActiveRecord::Base.connection_pool, :active_connection?
+    end
+
+    test "Current scopes in AR models are reset on reloading" do
+      rails %w(generate model post)
+      rails %w(db:migrate)
+
+      app_file "app/models/a.rb", "A = 1"
+      app_file "app/models/m.rb", "module M; end"
+      app_file "app/models/post.rb", <<~RUBY
+        class Post < ActiveRecord::Base
+          def self.is_a?(_)
+            false
+          end
+
+          def self.<(_)
+            false
+          end
+        end
+      RUBY
+
+      require "#{app_path}/config/environment"
+
+      assert A
+      assert M
+      Post.current_scope = Post
+      assert_not_nil ActiveRecord::Scoping::ScopeRegistry.current_scope(Post) # precondition
+
+      ActiveSupport::Dependencies.clear
+
+      assert_nil ActiveRecord::Scoping::ScopeRegistry.current_scope(Post)
+    end
+
+    test "filters for Active Record encrypted attributes are added to config.filter_parameters only once" do
+      rails %w(generate model post title:string)
+      rails %w(db:migrate)
+
+      app_file "app/models/post.rb", <<~RUBY
+        class Post < ActiveRecord::Base
+          encrypts :title
+        end
+      RUBY
+
+      require "#{app_path}/config/environment"
+
+      assert Post
+      filter_parameters = Rails.application.config.filter_parameters.dup
+
+      reload
+
+      assert Post
+      assert_equal filter_parameters, Rails.application.config.filter_parameters
+    end
+
+    test "ActiveRecord::MessagePack extensions are installed when using ActiveSupport::MessagePack::CacheSerializer" do
+      rails %w(generate model post title:string)
+      rails %w(db:migrate)
+
+      add_to_config <<~RUBY
+        config.cache_store = :file_store, #{app_path("tmp/cache").inspect}
+        config.active_support.cache_format_version = :message_pack
+      RUBY
+
+      require "#{app_path}/config/environment"
+
+      post = Post.create!(title: "Hello World")
+      Rails.cache.write("hello", post)
+      assert_equal post, Rails.cache.read("hello")
     end
   end
 end

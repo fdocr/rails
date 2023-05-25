@@ -10,7 +10,7 @@ module ActiveRecord
       ##
       # :singleton-method:
       # Indicates the format used to generate the timestamp in the cache key, if
-      # versioning is off. Accepts any of the symbols in <tt>Time::DATE_FORMATS</tt>.
+      # versioning is off. Accepts any of the symbols in +Time::DATE_FORMATS+.
       #
       # This is +:usec+, by default.
       class_attribute :cache_timestamp_format, instance_writer: false, default: :usec
@@ -79,7 +79,7 @@ module ActiveRecord
           timestamp = max_updated_column_timestamp
 
           if timestamp
-            timestamp = timestamp.utc.to_formatted_s(cache_timestamp_format)
+            timestamp = timestamp.utc.to_fs(cache_timestamp_format)
             "#{model_name.cache_key}/#{id}-#{timestamp}"
           else
             "#{model_name.cache_key}/#{id}"
@@ -103,10 +103,10 @@ module ActiveRecord
           raw_timestamp_to_cache_version(timestamp)
 
         elsif timestamp = updated_at
-          timestamp.utc.to_formatted_s(cache_timestamp_format)
+          timestamp.utc.to_fs(cache_timestamp_format)
         end
       elsif self.class.has_attribute?("updated_at")
-        raise ActiveModel::MissingAttributeError, "missing attribute: updated_at"
+        raise ActiveModel::MissingAttributeError, "missing attribute 'updated_at' for #{self.class}"
       end
     end
 

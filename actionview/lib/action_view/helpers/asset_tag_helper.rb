@@ -7,8 +7,9 @@ require "action_view/helpers/asset_url_helper"
 require "action_view/helpers/tag_helper"
 
 module ActionView
-  # = Action View Asset Tag Helpers
   module Helpers # :nodoc:
+    # = Action View Asset Tag \Helpers
+    #
     # This module provides methods for generating HTML that links views to assets such
     # as images, JavaScripts, stylesheets, and feeds. These methods do not verify
     # the assets exist before linking to them:
@@ -41,13 +42,14 @@ module ActionView
       # When the Asset Pipeline is enabled, you can pass the name of your manifest as
       # source, and include other JavaScript or CoffeeScript files inside the manifest.
       #
-      # If the server supports Early Hints header links for these assets will be
-      # automatically pushed.
+      # If the server supports HTTP Early Hints, and the +defer+ option is not
+      # enabled, Rails will push a <tt>103 Early Hints</tt> response that links
+      # to the assets.
       #
       # ==== Options
       #
       # When the last parameter is a hash you can add HTML attributes using that
-      # parameter. The following options are supported:
+      # parameter. This includes but is not limited to the following options:
       #
       # * <tt>:extname</tt>  - Append an extension to the generated URL unless the extension
       #   already exists. This only applies for relative URLs.
@@ -59,6 +61,20 @@ module ActionView
       #   when it is set to true.
       # * <tt>:nonce</tt>  - When set to true, adds an automatic nonce value if
       #   you have Content Security Policy enabled.
+      # * <tt>:async</tt>  - When set to +true+, adds the +async+ HTML
+      #   attribute, allowing the script to be fetched in parallel to be parsed
+      #   and evaluated as soon as possible.
+      # * <tt>:defer</tt>  - When set to +true+, adds the +defer+ HTML
+      #   attribute, which indicates to the browser that the script is meant to
+      #   be executed after the document has been parsed. Additionally, prevents
+      #   sending the Preload Links header.
+      #
+      # Any other specified options will be treated as HTML attributes for the
+      # +script+ tag.
+      #
+      # For more information regarding how the <tt>:async</tt> and <tt>:defer</tt>
+      # options affect the <tt><script></tt> tag, please refer to the
+      # {MDN docs}[https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script].
       #
       # ==== Examples
       #
@@ -86,6 +102,12 @@ module ActionView
       #
       #   javascript_include_tag "http://www.example.com/xmlhr.js", nonce: true
       #   # => <script src="http://www.example.com/xmlhr.js" nonce="..."></script>
+      #
+      #   javascript_include_tag "http://www.example.com/xmlhr.js", async: true
+      #   # => <script src="http://www.example.com/xmlhr.js" async="async"></script>
+      #
+      #   javascript_include_tag "http://www.example.com/xmlhr.js", defer: true
+      #   # => <script src="http://www.example.com/xmlhr.js" defer="defer"></script>
       def javascript_include_tag(*sources)
         options = sources.extract_options!.stringify_keys
         path_options = options.extract!("protocol", "extname", "host", "skip_pipeline").symbolize_keys
@@ -130,8 +152,8 @@ module ActionView
       # set <tt>extname: false</tt> in the options.
       # You can modify the link attributes by passing a hash as the last argument.
       #
-      # If the server supports Early Hints header links for these assets will be
-      # automatically pushed.
+      # If the server supports HTTP Early Hints, Rails will push a <tt>103 Early
+      # Hints</tt> response that links to the assets.
       #
       # ==== Options
       #
@@ -325,16 +347,17 @@ module ActionView
         crossorigin = "anonymous" if crossorigin == true || (crossorigin.blank? && as_type == "font")
         integrity = options[:integrity]
         nopush = options.delete(:nopush) || false
+        rel = mime_type == "module" ? "modulepreload" : "preload"
 
         link_tag = tag.link(**{
-          rel: "preload",
+          rel: rel,
           href: href,
           as: as_type,
           type: mime_type,
           crossorigin: crossorigin
         }.merge!(options.symbolize_keys))
 
-        preload_link = "<#{href}>; rel=preload; as=#{as_type}"
+        preload_link = "<#{href}>; rel=#{rel}; as=#{as_type}"
         preload_link += "; type=#{mime_type}" if mime_type
         preload_link += "; crossorigin=#{crossorigin}" if crossorigin
         preload_link += "; integrity=#{integrity}" if integrity
@@ -395,7 +418,7 @@ module ActionView
         check_for_image_tag_errors(options)
         skip_pipeline = options.delete(:skip_pipeline)
 
-        options[:src] = resolve_image_source(source, skip_pipeline)
+        options[:src] = resolve_asset_source("image", source, skip_pipeline)
 
         if options[:srcset] && !options[:srcset].is_a?(String)
           options[:srcset] = options[:srcset].map do |src_path, size|
@@ -412,11 +435,72 @@ module ActionView
         tag("img", options)
       end
 
+      # Returns an HTML picture tag for the +sources+. If +sources+ is a string,
+      # a single picture tag will be returned. If +sources+ is an array, a picture
+      # tag with nested source tags for each source will be returned. The
+      # +sources+ can be full paths, files that exist in your public images
+      # directory, or Active Storage attachments. Since the picture tag requires
+      # an img tag, the last element you provide will be used for the img tag.
+      # For complete control over the picture tag, a block can be passed, which
+      # will populate the contents of the tag accordingly.
+      #
+      # ==== Options
+      #
+      # When the last parameter is a hash you can add HTML attributes using that
+      # parameter. Apart from all the HTML supported options, the following are supported:
+      #
+      # * <tt>:image</tt> - Hash of options that are passed directly to the +image_tag+ helper.
+      #
+      # ==== Examples
+      #
+      #   picture_tag("picture.webp")
+      #   # => <picture><img src="/images/picture.webp" /></picture>
+      #   picture_tag("gold.png", :image => { :size => "20" })
+      #   # => <picture><img height="20" src="/images/gold.png" width="20" /></picture>
+      #   picture_tag("gold.png", :image => { :size => "45x70" })
+      #   # => <picture><img height="70" src="/images/gold.png" width="45" /></picture>
+      #   picture_tag("picture.webp", "picture.png")
+      #   # => <picture><source srcset="/images/picture.webp" /><source srcset="/images/picture.png" /><img src="/images/picture.png" /></picture>
+      #   picture_tag("picture.webp", "picture.png", :image => { alt: "Image" })
+      #   # => <picture><source srcset="/images/picture.webp" /><source srcset="/images/picture.png" /><img alt="Image" src="/images/picture.png" /></picture>
+      #   picture_tag(["picture.webp", "picture.png"], :image => { alt: "Image" })
+      #   # => <picture><source srcset="/images/picture.webp" /><source srcset="/images/picture.png" /><img alt="Image" src="/images/picture.png" /></picture>
+      #   picture_tag(:class => "my-class") { tag(:source, :srcset => image_path("picture.webp")) + image_tag("picture.png", :alt => "Image") }
+      #   # => <picture class="my-class"><source srcset="/images/picture.webp" /><img alt="Image" src="/images/picture.png" /></picture>
+      #   picture_tag { tag(:source, :srcset => image_path("picture-small.webp"), :media => "(min-width: 600px)") + tag(:source, :srcset => image_path("picture-big.webp")) + image_tag("picture.png", :alt => "Image") }
+      #   # => <picture><source srcset="/images/picture-small.webp" media="(min-width: 600px)" /><source srcset="/images/picture-big.webp" /><img alt="Image" src="/images/picture.png" /></picture>
+      #
+      # Active Storage blobs (images that are uploaded by the users of your app):
+      #
+      #   picture_tag(user.profile_picture)
+      #   # => <picture><img src="/rails/active_storage/blobs/.../profile_picture.webp" /></picture>
+      def picture_tag(*sources, &block)
+        sources.flatten!
+        options = sources.extract_options!.symbolize_keys
+        image_options = options.delete(:image) || {}
+        skip_pipeline = options.delete(:skip_pipeline)
+
+        content_tag("picture", options) do
+          if block.present?
+            capture(&block).html_safe
+          elsif sources.size <= 1
+            image_tag(sources.last, image_options)
+          else
+            source_tags = sources.map do |source|
+              tag("source",
+               srcset: resolve_asset_source("image", source, skip_pipeline),
+               type: Template::Types[File.extname(source)[1..]]&.to_s)
+            end
+            safe_join(source_tags << image_tag(sources.last, image_options))
+          end
+        end
+      end
+
       # Returns an HTML video tag for the +sources+. If +sources+ is a string,
       # a single video tag will be returned. If +sources+ is an array, a video
       # tag with nested source tags for each source will be returned. The
-      # +sources+ can be full paths or files that exist in your public videos
-      # directory.
+      # +sources+ can be full paths, files that exist in your public videos
+      # directory, or Active Storage attachments.
       #
       # ==== Options
       #
@@ -455,6 +539,11 @@ module ActionView
       #   # => <video><source src="/videos/trailer.ogg" /><source src="/videos/trailer.flv" /></video>
       #   video_tag(["trailer.ogg", "trailer.flv"], size: "160x120")
       #   # => <video height="120" width="160"><source src="/videos/trailer.ogg" /><source src="/videos/trailer.flv" /></video>
+      #
+      # Active Storage blobs (videos that are uploaded by the users of your app):
+      #
+      #   video_tag(user.intro_video)
+      #   # => <video src="/rails/active_storage/blobs/.../intro_video.mp4"></video>
       def video_tag(*sources)
         options = sources.extract_options!.symbolize_keys
         public_poster_folder = options.delete(:poster_skip_pipeline)
@@ -468,8 +557,8 @@ module ActionView
       # Returns an HTML audio tag for the +sources+. If +sources+ is a string,
       # a single audio tag will be returned. If +sources+ is an array, an audio
       # tag with nested source tags for each source will be returned. The
-      # +sources+ can be full paths or files that exist in your public audios
-      # directory.
+      # +sources+ can be full paths, files that exist in your public audios
+      # directory, or Active Storage attachments.
       #
       # When the last parameter is a hash you can add HTML attributes using that
       # parameter.
@@ -482,6 +571,11 @@ module ActionView
       #   # => <audio autoplay="autoplay" controls="controls" src="/audios/sound.wav"></audio>
       #   audio_tag("sound.wav", "sound.mid")
       #   # => <audio><source src="/audios/sound.wav" /><source src="/audios/sound.mid" /></audio>
+      #
+      # Active Storage blobs (audios that are uploaded by the users of your app):
+      #
+      #   audio_tag(user.name_pronunciation_audio)
+      #   # => <audio src="/rails/active_storage/blobs/.../name_pronunciation_audio.mp3"></audio>
       def audio_tag(*sources)
         multiple_sources_tag_builder("audio", sources)
       end
@@ -496,29 +590,29 @@ module ActionView
 
           if sources.size > 1
             content_tag(type, options) do
-              safe_join sources.map { |source| tag("source", src: send("path_to_#{type}", source, skip_pipeline: skip_pipeline)) }
+              safe_join sources.map { |source| tag("source", src: resolve_asset_source(type, source, skip_pipeline)) }
             end
           else
-            options[:src] = send("path_to_#{type}", sources.first, skip_pipeline: skip_pipeline)
+            options[:src] = resolve_asset_source(type, sources.first, skip_pipeline)
             content_tag(type, nil, options)
           end
         end
 
-        def resolve_image_source(source, skip_pipeline)
+        def resolve_asset_source(asset_type, source, skip_pipeline)
           if source.is_a?(Symbol) || source.is_a?(String)
-            path_to_image(source, skip_pipeline: skip_pipeline)
+            path_to_asset(source, type: asset_type.to_sym, skip_pipeline: skip_pipeline)
           else
             polymorphic_url(source)
           end
         rescue NoMethodError => e
-          raise ArgumentError, "Can't resolve image into URL: #{e}"
+          raise ArgumentError, "Can't resolve #{asset_type} into URL: #{e}"
         end
 
         def extract_dimensions(size)
           size = size.to_s
-          if /\A\d+x\d+\z/.match?(size)
+          if /\A\d+(?:\.\d+)?x\d+(?:\.\d+)?\z/.match?(size)
             size.split("x")
-          elsif /\A\d+\z/.match?(size)
+          elsif /\A\d+(?:\.\d+)?\z/.match?(size)
             [size, size]
           end
         end
@@ -542,13 +636,14 @@ module ActionView
         MAX_HEADER_SIZE = 8_000 # Some HTTP client and proxies have a 8kiB header limit
         def send_preload_links_header(preload_links, max_header_size: MAX_HEADER_SIZE)
           return if preload_links.empty?
-          return if respond_to?(:response) && response.sending?
+          response_present = respond_to?(:response) && response
+          return if response_present && response.sending?
 
           if respond_to?(:request) && request
             request.send_early_hints("Link" => preload_links.join("\n"))
           end
 
-          if respond_to?(:response) && response
+          if response_present
             header = response.headers["Link"]
             header = header ? header.dup : +""
 

@@ -91,12 +91,12 @@ class GeneratedAttributeTest < Rails::Generators::TestCase
 
   def test_default_value_is_datetime
     %w(datetime timestamp time).each do |attribute_type|
-      assert_field_default_value attribute_type, Time.now.to_formatted_s(:db)
+      assert_field_default_value attribute_type, Time.now.to_fs(:db)
     end
   end
 
   def test_default_value_is_date
-    assert_field_default_value :date, Date.today.to_formatted_s(:db)
+    assert_field_default_value :date, Date.today.to_fs(:db)
   end
 
   def test_default_value_is_string
@@ -133,6 +133,30 @@ class GeneratedAttributeTest < Rails::Generators::TestCase
       "Full name",
       create_generated_attribute(:string, "full_name").human_name
     )
+  end
+
+  def test_size_option_can_be_passed_to_string_text_and_binary
+    %w(text binary).each do |attribute_type|
+      generated_attribute = create_generated_attribute("#{attribute_type}{medium}")
+      assert_equal generated_attribute.attr_options[:size], :medium
+    end
+  end
+
+  def test_size_option_raises_exception_when_passed_to_invalid_type
+    %w(integer string).each do |attribute_type|
+      e = assert_raise Rails::Generators::Error do
+        create_generated_attribute("#{attribute_type}{medium}")
+      end
+      message = "Could not generate field 'test' with unknown type '#{attribute_type}{medium}'"
+      assert_match message, e.message
+    end
+  end
+
+  def test_limit_option_can_be_passed_to_string_text_integer_and_binary
+    %w(string text binary integer).each do |attribute_type|
+      generated_attribute = create_generated_attribute("#{attribute_type}{65535}")
+      assert_equal generated_attribute.attr_options[:limit], 65535
+    end
   end
 
   def test_reference_is_true

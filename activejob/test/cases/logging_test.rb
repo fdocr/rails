@@ -11,6 +11,7 @@ require "jobs/rescue_job"
 require "jobs/retry_job"
 require "jobs/disable_log_job"
 require "jobs/abort_before_enqueue_job"
+require "jobs/enqueue_error_job"
 require "models/person"
 
 class LoggingTest < ActiveSupport::TestCase
@@ -267,19 +268,19 @@ class LoggingTest < ActiveSupport::TestCase
   def test_enqueue_retry_logging
     perform_enqueued_jobs do
       RetryJob.perform_later "DefaultsError", 2
-      assert_match(/Retrying RetryJob in 3 seconds, due to a DefaultsError\./, @logger.messages)
+      assert_match(/Retrying RetryJob \(Job ID: .*?\) after \d+ attempts in 3 seconds, due to a DefaultsError.*\./, @logger.messages)
     end
   end
 
   def test_enqueue_retry_logging_on_retry_job
     perform_enqueued_jobs { RescueJob.perform_later "david" }
-    assert_match(/Retrying RescueJob in 0 seconds\./, @logger.messages)
+    assert_match(/Retrying RescueJob \(Job ID: .*?\) after \d+ attempts in 0 seconds\./, @logger.messages)
   end
 
   def test_retry_stopped_logging
     perform_enqueued_jobs do
       RetryJob.perform_later "CustomCatchError", 6
-      assert_match(/Stopped retrying RetryJob due to a CustomCatchError, which reoccurred on \d+ attempts\./, @logger.messages)
+      assert_match(/Stopped retrying RetryJob \(Job ID: .*?\) due to a CustomCatchError.*, which reoccurred on \d+ attempts\./, @logger.messages)
     end
   end
 
@@ -287,14 +288,55 @@ class LoggingTest < ActiveSupport::TestCase
     perform_enqueued_jobs do
       RetryJob.perform_later "DefaultsError", 6
     rescue DefaultsError
-      assert_match(/Stopped retrying RetryJob due to a DefaultsError, which reoccurred on \d+ attempts\./, @logger.messages)
+      assert_match(/Stopped retrying RetryJob \(Job ID: .*?\) due to a DefaultsError.*, which reoccurred on \d+ attempts\./, @logger.messages)
     end
   end
 
   def test_discard_logging
     perform_enqueued_jobs do
       RetryJob.perform_later "DiscardableError", 2
-      assert_match(/Discarded RetryJob due to a DiscardableError\./, @logger.messages)
+      assert_match(/Discarded RetryJob \(Job ID: .*?\) due to a DiscardableError.*\./, @logger.messages)
     end
+  end
+
+  def test_enqueue_all_job_logging_some_jobs_failed_enqueuing
+    EnqueueErrorJob.disable_test_adapter
+
+    EnqueueErrorJob::EnqueueErrorAdapter.should_raise_sequence = [false, true]
+
+    ActiveJob.perform_all_later(EnqueueErrorJob.new, EnqueueErrorJob.new)
+    assert_match(/Enqueued 1 job to .+ \(1 EnqueueErrorJob\)\. Failed enqueuing 1 job/, @logger.messages)
+  ensure
+    EnqueueErrorJob::EnqueueErrorAdapter.should_raise_sequence = []
+  end
+
+  def test_enqueue_all_job_logging_all_jobs_failed_enqueuing
+    EnqueueErrorJob.disable_test_adapter
+
+    EnqueueErrorJob::EnqueueErrorAdapter.should_raise_sequence = [true, true]
+
+    ActiveJob.perform_all_later(EnqueueErrorJob.new, EnqueueErrorJob.new)
+    assert_match(/Failed enqueuing 2 jobs to .+/, @logger.messages)
+  ensure
+    EnqueueErrorJob::EnqueueErrorAdapter.should_raise_sequence = []
+  end
+
+  def test_verbose_enqueue_logs
+    ActiveJob.verbose_enqueue_logs = true
+
+    LoggingJob.perform_later "Dummy"
+    assert_match("↳", @logger.messages)
+  ensure
+    ActiveJob.verbose_enqueue_logs = false
+  end
+
+  def test_verbose_enqueue_logs_disabled_by_default
+    LoggingJob.perform_later "Dummy"
+    assert_no_match("↳", @logger.messages)
+  end
+
+  def test_enqueue_all_job_logging
+    ActiveJob.perform_all_later(LoggingJob.new("Dummy"), HelloJob.new("Jamie"), HelloJob.new("John"))
+    assert_match(/Enqueued 3 jobs to .+ \(2 HelloJob, 1 LoggingJob\)/, @logger.messages)
   end
 end

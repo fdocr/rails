@@ -1,34 +1,25 @@
 # frozen_string_literal: true
 
 require "active_record/connection_adapters/abstract_mysql_adapter"
-require "active_record/connection_adapters/mysql/database_statements"
+require "active_record/connection_adapters/mysql2/database_statements"
 
 gem "mysql2", "~> 0.5"
 require "mysql2"
 
 module ActiveRecord
   module ConnectionHandling # :nodoc:
+    def mysql2_adapter_class
+      ConnectionAdapters::Mysql2Adapter
+    end
+
     # Establishes a connection to the database that's used by all Active Record objects.
     def mysql2_connection(config)
-      config = config.symbolize_keys
-      config[:flags] ||= 0
-
-      if config[:flags].kind_of? Array
-        config[:flags].push "FOUND_ROWS"
-      else
-        config[:flags] |= Mysql2::Client::FOUND_ROWS
-      end
-
-      ConnectionAdapters::Mysql2Adapter.new(
-        ConnectionAdapters::Mysql2Adapter.new_client(config),
-        logger,
-        nil,
-        config,
-      )
+      mysql2_adapter_class.new(config)
     end
   end
 
   module ConnectionAdapters
+    # = Active Record MySQL2 Adapter
     class Mysql2Adapter < AbstractMysqlAdapter
       ER_BAD_DB_ERROR        = 1049
       ER_ACCESS_DENIED_ERROR = 1045
@@ -37,12 +28,12 @@ module ActiveRecord
 
       ADAPTER_NAME = "Mysql2"
 
-      include MySQL::DatabaseStatements
+      include Mysql2::DatabaseStatements
 
       class << self
         def new_client(config)
-          Mysql2::Client.new(config)
-        rescue Mysql2::Error => error
+          ::Mysql2::Client.new(config)
+        rescue ::Mysql2::Error => error
           if error.error_number == ConnectionAdapters::Mysql2Adapter::ER_BAD_DB_ERROR
             raise ActiveRecord::NoDatabaseError.db_error(config[:database])
           elsif error.error_number == ConnectionAdapters::Mysql2Adapter::ER_ACCESS_DENIED_ERROR
@@ -53,19 +44,35 @@ module ActiveRecord
             raise ActiveRecord::ConnectionNotEstablished, error.message
           end
         end
+
+        private
+          def initialize_type_map(m)
+            super
+
+            m.register_type(%r(char)i) do |sql_type|
+              limit = extract_limit(sql_type)
+              Type.lookup(:string, adapter: :mysql2, limit: limit)
+            end
+
+            m.register_type %r(^enum)i, Type.lookup(:string, adapter: :mysql2)
+            m.register_type %r(^set)i,  Type.lookup(:string, adapter: :mysql2)
+          end
       end
 
-      def initialize(connection, logger, connection_options, config)
-        check_prepared_statements_deprecation(config)
-        superclass_config = config.reverse_merge(prepared_statements: false)
-        super(connection, logger, connection_options, superclass_config)
-        configure_connection
-      end
+      TYPE_MAP = Type::TypeMap.new.tap { |m| initialize_type_map(m) }
 
-      def self.database_exists?(config)
-        !!ActiveRecord::Base.mysql2_connection(config)
-      rescue ActiveRecord::NoDatabaseError
-        false
+      def initialize(...)
+        super
+
+        @config[:flags] ||= 0
+
+        if @config[:flags].kind_of? Array
+          @config[:flags].push "FOUND_ROWS"
+        else
+          @config[:flags] |= ::Mysql2::Client::FOUND_ROWS
+        end
+
+        @connection_parameters ||= @config
       end
 
       def supports_json?
@@ -81,6 +88,10 @@ module ActiveRecord
       end
 
       def supports_savepoints?
+        true
+      end
+
+      def savepoint_errors_invalidate_transactions?
         true
       end
 
@@ -106,10 +117,11 @@ module ActiveRecord
       # QUOTING ==================================================
       #++
 
+      # Quotes strings for use in SQL input.
       def quote_string(string)
-        @connection.escape(string)
-      rescue Mysql2::Error => error
-        raise translate_exception(error, message: error.message, sql: "<escape>", binds: [])
+        with_raw_connection(allow_retry: true, materialize_transactions: false) do |connection|
+          connection.escape(string)
+        end
       end
 
       #--
@@ -117,45 +129,43 @@ module ActiveRecord
       #++
 
       def active?
-        @connection.ping
+        !!@raw_connection&.ping
       end
 
-      def reconnect!
-        super
-        disconnect!
-        connect
-      end
       alias :reset! :reconnect!
 
       # Disconnects from the database if already connected.
       # Otherwise, this method does nothing.
       def disconnect!
         super
-        @connection.close
+        @raw_connection&.close
+        @raw_connection = nil
       end
 
       def discard! # :nodoc:
         super
-        @connection.automatic_close = false
-        @connection = nil
+        @raw_connection&.automatic_close = false
+        @raw_connection = nil
       end
 
       private
-        def check_prepared_statements_deprecation(config)
-          if !config.key?(:prepared_statements)
-            ActiveSupport::Deprecation.warn(<<-MSG.squish)
-              The default value of `prepared_statements` for the mysql2 adapter will be changed from +false+ to +true+ in Rails 7.2.
-            MSG
-          end
+        def text_type?(type)
+          TYPE_MAP.lookup(type).is_a?(Type::String) || TYPE_MAP.lookup(type).is_a?(Type::Text)
         end
 
         def connect
-          @connection = self.class.new_client(@config)
-          configure_connection
+          @raw_connection = self.class.new_client(@connection_parameters)
+        end
+
+        def reconnect
+          @raw_connection&.close
+          @raw_connection = nil
+          connect
         end
 
         def configure_connection
-          @connection.query_options[:as] = :array
+          @raw_connection.query_options[:as] = :array
+          @raw_connection.query_options[:database_timezone] = default_timezone
           super
         end
 
@@ -164,16 +174,41 @@ module ActiveRecord
         end
 
         def get_full_version
-          @connection.server_info[:version]
+          any_raw_connection.server_info[:version]
         end
 
         def translate_exception(exception, message:, sql:, binds:)
-          if exception.is_a?(Mysql2::Error::TimeoutError) && !exception.error_number
+          if exception.is_a?(::Mysql2::Error::TimeoutError) && !exception.error_number
             ActiveRecord::AdapterTimeout.new(message, sql: sql, binds: binds)
+          elsif exception.is_a?(::Mysql2::Error::ConnectionError)
+            if exception.message.match?(/MySQL client is not connected/i)
+              ActiveRecord::ConnectionNotEstablished.new(exception)
+            else
+              ActiveRecord::ConnectionFailed.new(message, sql: sql, binds: binds)
+            end
           else
             super
           end
         end
+
+        def default_prepared_statements
+          ActiveRecord.deprecator.warn(<<-MSG.squish)
+            The default value of `prepared_statements` for the mysql2 adapter will be changed from +false+ to +true+ in Rails 7.2.
+          MSG
+          false
+        end
+
+        ActiveRecord::Type.register(:immutable_string, adapter: :mysql2) do |_, **args|
+          Type::ImmutableString.new(true: "1", false: "0", **args)
+        end
+
+        ActiveRecord::Type.register(:string, adapter: :mysql2) do |_, **args|
+          Type::String.new(true: "1", false: "0", **args)
+        end
+
+        ActiveRecord::Type.register(:unsigned_integer, Type::UnsignedInteger, adapter: :mysql2)
     end
+
+    ActiveSupport.run_load_hooks(:active_record_mysql2adapter, Mysql2Adapter)
   end
 end

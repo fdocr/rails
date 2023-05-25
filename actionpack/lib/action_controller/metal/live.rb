@@ -5,6 +5,8 @@ require "delegate"
 require "active_support/json"
 
 module ActionController
+  # = Action Controller \Live
+  #
   # Mix this module into your controller, and all actions in that controller
   # will be able to stream data to the client as it's written.
   #
@@ -34,6 +36,21 @@ module ActionController
   # The final caveat is that your actions are executed in a separate thread than
   # the main thread. Make sure your actions are thread safe, and this shouldn't
   # be a problem (don't share state across threads, etc).
+  #
+  # Note that \Rails includes +Rack::ETag+ by default, which will buffer your
+  # response. As a result, streaming responses may not work properly with Rack
+  # 2.2.x, and you may need to implement workarounds in your application.
+  # You can either set the +ETag+ or +Last-Modified+ response headers or remove
+  # +Rack::ETag+ from the middleware stack to address this issue.
+  #
+  # Here's an example of how you can set the +Last-Modified+ header if your Rack
+  # version is 2.2.x:
+  #
+  #   def stream
+  #     response.headers["Content-Type"] = "text/event-stream"
+  #     response.headers["Last-Modified"] = Time.now.httpdate # Add this line if your Rack version is 2.2.x
+  #     ...
+  #   end
   module Live
     extend ActiveSupport::Concern
 
@@ -49,6 +66,8 @@ module ActionController
       end
     end
 
+    # = Action Controller \Live Server Sent Events
+    #
     # This class provides the ability to write an SSE (Server Sent Event)
     # to an IO stream. The class is initialized with a stream and can be used
     # to either write a JSON string or an object which can be converted to JSON.
@@ -261,6 +280,7 @@ module ActionController
           # Since we're processing the view in a different thread, copy the
           # thread locals from the main thread to the child thread. :'(
           locals.each { |k, v| t2[k] = v }
+          ActiveSupport::IsolatedExecutionState.share_with(t1)
 
           begin
             super(name)
@@ -320,7 +340,7 @@ module ActionController
     def send_stream(filename:, disposition: "attachment", type: nil)
       response.headers["Content-Type"] =
         (type.is_a?(Symbol) ? Mime[type].to_s : type) ||
-        Mime::Type.lookup_by_extension(File.extname(filename).downcase.delete(".")) ||
+        Mime::Type.lookup_by_extension(File.extname(filename).downcase.delete("."))&.to_s ||
         "application/octet-stream"
 
       response.headers["Content-Disposition"] =

@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "plugin_helpers"
 require "generators/generators_test_helper"
 require "rails/generators/rails/scaffold_controller/scaffold_controller_generator"
 
@@ -9,6 +10,7 @@ module Unknown
 end
 
 class ScaffoldControllerGeneratorTest < Rails::Generators::TestCase
+  include PluginHelpers
   include GeneratorsTestHelper
   arguments %w(User name:string age:integer)
 
@@ -44,6 +46,7 @@ class ScaffoldControllerGeneratorTest < Rails::Generators::TestCase
       assert_instance_method :destroy, content do |m|
         assert_match(/@user\.destroy/, m)
         assert_match(/User was successfully destroyed/, m)
+        assert_match(/status: :see_other/, m)
       end
 
       assert_instance_method :set_user, content do |m|
@@ -207,14 +210,17 @@ class ScaffoldControllerGeneratorTest < Rails::Generators::TestCase
   def test_model_name_option
     run_generator ["Admin::User", "--model-name=User"]
     assert_file "app/controllers/admin/users_controller.rb" do |content|
+      assert_match "# GET /admin/users", content
       assert_instance_method :index, content do |m|
         assert_match("@users = User.all", m)
       end
 
+      assert_match "# POST /admin/users", content
       assert_instance_method :create, content do |m|
         assert_match("redirect_to [:admin, @user]", m)
       end
 
+      assert_match "# PATCH/PUT /admin/users/1", content
       assert_instance_method :update, content do |m|
         assert_match("redirect_to [:admin, @user]", m)
       end
@@ -266,11 +272,9 @@ class ScaffoldControllerGeneratorTest < Rails::Generators::TestCase
   end
 
   def test_controller_tests_pass_by_default_inside_mountable_engine
-    Dir.chdir(destination_root) { `bundle exec rails plugin new bukkits --mountable` }
-
     engine_path = File.join(destination_root, "bukkits")
 
-    Dir.chdir(engine_path) do
+    with_new_plugin(engine_path, "--mountable") do
       quietly { `bin/rails g controller dashboard foo` }
       quietly { `bin/rails db:migrate RAILS_ENV=test` }
       assert_match(/2 runs, 2 assertions, 0 failures, 0 errors/, `bin/rails test 2>&1`)
@@ -278,11 +282,9 @@ class ScaffoldControllerGeneratorTest < Rails::Generators::TestCase
   end
 
   def test_controller_tests_pass_by_default_inside_full_engine
-    Dir.chdir(destination_root) { `bundle exec rails plugin new bukkits --full` }
-
     engine_path = File.join(destination_root, "bukkits")
 
-    Dir.chdir(engine_path) do
+    with_new_plugin(engine_path, "--full") do
       quietly { `bin/rails g controller dashboard foo` }
       quietly { `bin/rails db:migrate RAILS_ENV=test` }
       assert_match(/2 runs, 2 assertions, 0 failures, 0 errors/, `bin/rails test 2>&1`)

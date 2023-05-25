@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "pp"
 require "cases/helper"
 require "models/tag"
 require "models/tagging"
@@ -26,9 +27,10 @@ require "models/category"
 require "models/categorization"
 require "models/edge"
 require "models/subscriber"
+require "models/cpk"
 
 class RelationTest < ActiveRecord::TestCase
-  fixtures :authors, :author_addresses, :topics, :entrants, :developers, :people, :companies, :developers_projects, :accounts, :categories, :categorizations, :categories_posts, :posts, :comments, :tags, :taggings, :cars, :minivans
+  fixtures :authors, :author_addresses, :topics, :entrants, :developers, :people, :companies, :developers_projects, :accounts, :categories, :categorizations, :categories_posts, :posts, :comments, :tags, :taggings, :cars, :minivans, :cpk_orders
 
   def test_do_not_double_quote_string_id
     van = Minivan.last
@@ -473,7 +475,7 @@ class RelationTest < ActiveRecord::TestCase
 
   def test_finding_with_sanitized_order
     query = Tag.order([Arel.sql("field(id, ?)"), [1, 3, 2]]).to_sql
-    if current_adapter?(:Mysql2Adapter)
+    if current_adapter?(:Mysql2Adapter, :TrilogyAdapter)
       assert_match(/field\(id, '1','3','2'\)/, query)
     else
       assert_match(/field\(id, 1,3,2\)/, query)
@@ -483,6 +485,21 @@ class RelationTest < ActiveRecord::TestCase
     assert_match(/field\(id, NULL\)/, query)
 
     query = Tag.order([Arel.sql("field(id, ?)"), nil]).to_sql
+    assert_match(/field\(id, NULL\)/, query)
+  end
+
+  def test_finding_with_arel_sql_order
+    query = Tag.order(Arel.sql("field(id, ?)", [1, 3, 2])).to_sql
+    if current_adapter?(:Mysql2Adapter, :TrilogyAdapter)
+      assert_match(/field\(id, '1', '3', '2'\)/, query)
+    else
+      assert_match(/field\(id, 1, 3, 2\)/, query)
+    end
+
+    query = Tag.order(Arel.sql("field(id, ?)", [])).to_sql
+    assert_match(/field\(id, NULL\)/, query)
+
+    query = Tag.order(Arel.sql("field(id, ?)", nil)).to_sql
     assert_match(/field\(id, NULL\)/, query)
   end
 
@@ -543,7 +560,7 @@ class RelationTest < ActiveRecord::TestCase
   end
 
   %w( references includes preload eager_load group order reorder reselect unscope
-      joins left_joins left_outer_joins optimizer_hints annotate ).each do |method|
+      joins left_joins left_outer_joins optimizer_hints annotate regroup ).each do |method|
     class_eval <<~RUBY
       def test_no_arguments_to_#{method}_raise_errors
         error = assert_raises(ArgumentError) { Topic.#{method}() }
@@ -929,6 +946,21 @@ class RelationTest < ActiveRecord::TestCase
     }
   end
 
+  def test_find_all_using_where_with_relation_with_no_selects_and_composite_primary_key_raises
+    order = cpk_orders(:cpk_groceries_order_1)
+    subquery = Cpk::Order.where(Cpk::Order.primary_key => [order.id])
+
+    assert_nothing_raised do
+      Cpk::Order.where(id: subquery.select(:id)).to_a
+    end
+
+    error = assert_raise(ArgumentError) do
+      Cpk::Order.where(id: subquery).to_a
+    end
+
+    assert_equal "Cannot map composite primary key [\"shop_id\", \"id\"] to id", error.message
+  end
+
   def test_find_all_using_where_with_relation_does_not_alter_select_values
     david = authors(:david)
 
@@ -1156,6 +1188,9 @@ class RelationTest < ActiveRecord::TestCase
 
       assert posts.any? { |p| p.id > 0 }
       assert_not posts.any? { |p| p.id <= 0 }
+
+      assert posts.any?(Post)
+      assert_not posts.any?(Comment)
     end
 
     assert_predicate posts, :loaded?
@@ -1195,6 +1230,9 @@ class RelationTest < ActiveRecord::TestCase
     assert_queries(1) do
       assert posts.none? { |p| p.id < 0 }
       assert_not posts.none? { |p| p.id == 1 }
+
+      assert posts.none?(Comment)
+      assert_not posts.none?(Post)
     end
 
     assert_predicate posts, :loaded?
@@ -1211,6 +1249,9 @@ class RelationTest < ActiveRecord::TestCase
     assert_queries(1) do
       assert_not posts.one? { |p| p.id < 3 }
       assert posts.one? { |p| p.id == 1 }
+
+      assert_not posts.one?(Post)
+      assert_not posts.one?(Comment)
     end
 
     assert_predicate posts, :loaded?
@@ -1304,6 +1345,18 @@ class RelationTest < ActiveRecord::TestCase
     assert_equal ["parrot", "canary"], green_birds.map(&:name)
     assert_equal ["green", "green"], green_birds.map(&:color)
     green_birds.each { |bird| assert_predicate bird, :persisted? }
+  end
+
+  def test_create_with_block
+    sparrow = Bird.create do |bird|
+      bird.name = "sparrow"
+      bird.color = "grey"
+    end
+
+    assert_kind_of Bird, sparrow
+    assert_predicate sparrow, :persisted?
+    assert_equal "sparrow", sparrow.name
+    assert_equal "grey", sparrow.color
   end
 
   def test_create_bang_with_array
@@ -1470,6 +1523,27 @@ class RelationTest < ActiveRecord::TestCase
     assert_equal bird, Bird.find_or_create_by(name: "bob")
   end
 
+  def test_find_or_create_by_race_condition
+    assert_nil Subscriber.find_by(nick: "bob")
+
+    bob = Subscriber.create!(nick: "bob")
+    relation = Subscriber.all
+
+    results = [nil, bob]
+    find_by_mock = -> (*) do
+      assert_not_predicate results, :empty?
+      results.shift
+    end
+
+    relation.stub(:find_by, find_by_mock) do
+      relation.stub(:find_by!, find_by_mock) do # create_or_find_by always call find_by! on retry
+        assert_equal bob, relation.find_or_create_by(nick: "bob")
+      end
+    end
+
+    assert_predicate results, :empty?
+  end
+
   def test_find_or_create_by_with_create_with
     assert_nil Bird.find_by(name: "bob")
 
@@ -1478,6 +1552,19 @@ class RelationTest < ActiveRecord::TestCase
     assert_equal "green", bird.color
 
     assert_equal bird, Bird.create_with(color: "blue").find_or_create_by(name: "bob")
+  end
+
+  def test_find_or_create_by_with_block
+    assert_nil Bird.find_by(name: "bob")
+
+    bird = Bird.find_or_create_by(name: "bob") do |record|
+      record.color = "blue"
+    end
+    assert_predicate bird, :persisted?
+    assert_equal bird.name, "bob"
+    assert_equal bird.color, "blue"
+
+    assert_equal bird, Bird.find_or_create_by(name: "bob", color: "blue")
   end
 
   def test_find_or_create_by!
@@ -1489,6 +1576,20 @@ class RelationTest < ActiveRecord::TestCase
 
     subscriber = Subscriber.create!(nick: "bob")
 
+    assert_equal subscriber, Subscriber.create_or_find_by(nick: "bob")
+    assert_not_equal subscriber, Subscriber.create_or_find_by(nick: "cat")
+  end
+
+  def test_create_or_find_by_with_block
+    assert_nil Subscriber.find_by(nick: "bob")
+
+    subscriber = Subscriber.create_or_find_by(nick: "bob") do |record|
+      record.name = "the builder"
+    end
+
+    assert_equal "bob", subscriber.nick
+    assert_equal "the builder", subscriber.name
+    assert_predicate subscriber, :persisted?
     assert_equal subscriber, Subscriber.create_or_find_by(nick: "bob")
     assert_not_equal subscriber, Subscriber.create_or_find_by(nick: "cat")
   end
@@ -1559,6 +1660,20 @@ class RelationTest < ActiveRecord::TestCase
     bird.save!
 
     assert_equal bird, Bird.find_or_initialize_by(name: "bob")
+  end
+
+  def test_find_or_initialize_by_with_block
+    assert_nil Bird.find_by(name: "bob")
+
+    bird = Bird.find_or_initialize_by(name: "bob") do |record|
+      record.color = "blue"
+    end
+    assert_predicate bird, :new_record?
+    assert_equal bird.name, "bob"
+    assert_equal bird.color, "blue"
+    bird.save!
+
+    assert_equal bird, Bird.find_or_initialize_by(name: "bob", color: "blue")
   end
 
   def test_explicit_create_with
@@ -2021,6 +2136,35 @@ class RelationTest < ActiveRecord::TestCase
     end
   end
 
+  test "relations limit the records in #pretty_print at 10" do
+    relation = Post.limit(11)
+    out = StringIO.new
+    PP.pp(relation, out)
+    assert_equal 10, out.string.scan(/#<\w*Post:/).size
+    assert out.string.end_with?("\"...\"]\n"), "Did not end with an ellipsis."
+  end
+
+  test "relations don't load all records in #pretty_print" do
+    assert_sql(/LIMIT|ROWNUM <=|FETCH FIRST/) do
+      PP.pp Post.all, StringIO.new # avoid outputting.
+    end
+  end
+
+  test "loading query is annotated in #pretty_print" do
+    assert_sql(%r(/\* loading for pp \*/)) do
+      PP.pp Post.all, StringIO.new # avoid outputting.
+    end
+  end
+
+  test "already-loaded relations don't perform a new query in #pretty_print" do
+    relation = Post.limit(2)
+    relation.to_a
+
+    assert_no_queries do
+      PP.pp relation, StringIO.new # avoid outputting.
+    end
+  end
+
   test "using a custom table affects the wheres" do
     post = posts(:welcome)
 
@@ -2078,6 +2222,8 @@ class RelationTest < ActiveRecord::TestCase
   test "joins with order by custom attribute" do
     companies = Company.create!([{ name: "test1" }, { name: "test2" }])
     companies.each { |company| company.contracts.create! }
+    # In ordering by Contract#metadata, we rely on that JSON string to
+    # be consistent
     assert_equal companies, Company.joins(:contracts).order(:metadata, :count)
     assert_equal companies.reverse, Company.joins(:contracts).order(metadata: :desc, count: :desc)
   end
@@ -2286,7 +2432,7 @@ class RelationTest < ActiveRecord::TestCase
     assert_empty authors
   end
 
-  (ActiveRecord::Relation::MULTI_VALUE_METHODS - [:extending]).each do |method|
+  (ActiveRecord::Relation::MULTI_VALUE_METHODS - [:extending, :with]).each do |method|
     test "#{method} with blank value" do
       authors = Author.public_send(method, [""])
       assert_empty authors.public_send(:"#{method}_values")
@@ -2305,4 +2451,54 @@ class RelationTest < ActiveRecord::TestCase
         predicate_builder: predicate_builder
       )
     end
+end
+
+class CreateOrFindByWithinTransactions < ActiveRecord::TestCase
+  unless current_adapter?(:SQLite3Adapter)
+    self.use_transactional_tests = false
+
+    def teardown
+      Subscriber.delete_all
+    end
+
+    def test_multiple_find_or_create_by_within_transactions
+      duel { Subscriber.find_or_create_by(nick: "bob") }
+    end
+
+    def test_multiple_find_or_create_by_bang_within_transactions
+      duel { Subscriber.find_or_create_by!(nick: "bob") }
+    end
+
+    private
+      def duel
+        assert_nil Subscriber.find_by(nick: "bob")
+
+        a_wakeup = Concurrent::Event.new
+        b_wakeup = Concurrent::Event.new
+
+        a = Thread.new do
+          Subscriber.transaction do
+            a_wakeup.wait
+            yield
+            b_wakeup.set
+          end
+        end
+
+        b = Thread.new do
+          Subscriber.transaction do
+            # Read the record prematurely for MySQL REPEATABLE READ to kick in
+            Subscriber.find_by(nick: "bob")
+
+            a_wakeup.set
+            b_wakeup.wait
+            yield
+          end
+        end
+
+        a.join
+        b.join
+
+        assert_equal 1, Subscriber.where(nick: "bob").count
+      end
+  end
 end

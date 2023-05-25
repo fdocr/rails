@@ -77,7 +77,7 @@ class ToSentenceTest < ActiveSupport::TestCase
   end
 end
 
-class ToSTest < ActiveSupport::TestCase
+class ToFsTest < ActiveSupport::TestCase
   class TestDB
     def self.reset
       @@counter = 0
@@ -94,30 +94,13 @@ class ToSTest < ActiveSupport::TestCase
     TestDB.reset
   end
 
-  def test_to_s_db
+  def test_to_fs_db
     collection = [TestDB.new, TestDB.new, TestDB.new]
 
-    assert_deprecated do
-      assert_equal "null", [].to_s(:db)
-    end
-    assert_deprecated do
-      assert_equal "1,2,3", collection.to_s(:db)
-    end
-  end
-
-  def test_to_s_not_existent
-    assert_deprecated do
-      assert_equal "[]", [].to_s(:not_existent)
-    end
-  end
-
-  def test_to_formatted_s_db
-    collection = [TestDB.new, TestDB.new, TestDB.new]
-
-    assert_equal "null", [].to_formatted_s(:db)
-    assert_equal "1,2,3", collection.to_formatted_s(:db)
     assert_equal "null", [].to_fs(:db)
-    assert_equal "4,5,6", collection.to_fs(:db)
+    assert_equal "1,2,3", collection.to_fs(:db)
+    assert_equal "null", [].to_formatted_s(:db)
+    assert_equal "4,5,6", collection.to_formatted_s(:db)
   end
 end
 

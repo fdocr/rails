@@ -26,6 +26,8 @@ module AbstractController
     end
   end
 
+  # = Abstract Controller \Base
+  #
   # AbstractController::Base is a low-level API. Nobody should be
   # using it directly, and subclasses (like ActionController::Base) are
   # expected to provide their own +render+ method, since rendering means
@@ -70,7 +72,7 @@ module AbstractController
       # instance methods on that abstract class. Public instance methods of
       # a controller would normally be considered action methods, so methods
       # declared on abstract classes are being removed.
-      # (<tt>ActionController::Metal</tt> and ActionController::Base are defined as abstract)
+      # (ActionController::Metal and ActionController::Base are defined as abstract)
       def internal_methods
         controller = self
 
@@ -127,6 +129,11 @@ module AbstractController
         super
         clear_action_methods!
       end
+
+      def eager_load! # :nodoc:
+        action_methods
+        nil
+      end
     end
 
     abstract!
@@ -150,13 +157,14 @@ module AbstractController
 
       process_action(action_name, *args)
     end
+    ruby2_keywords(:process)
 
-    # Delegates to the class' ::controller_path
+    # Delegates to the class's ::controller_path.
     def controller_path
       self.class.controller_path
     end
 
-    # Delegates to the class' ::action_methods
+    # Delegates to the class's ::action_methods.
     def action_methods
       self.class.action_methods
     end
@@ -177,7 +185,7 @@ module AbstractController
 
     # Tests if a response body is set. Used to determine if the
     # +process_action+ callback needs to be terminated in
-    # +AbstractController::Callbacks+.
+    # AbstractController::Callbacks.
     def performed?
       response_body
     end
@@ -210,8 +218,8 @@ module AbstractController
       #
       # Notice that the first argument is the method to be dispatched
       # which is *not* necessarily the same as the action name.
-      def process_action(method_name, *args)
-        send_action(method_name, *args)
+      def process_action(...)
+        send_action(...)
       end
 
       # Actually call the method associated with the action. Override

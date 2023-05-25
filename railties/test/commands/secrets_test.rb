@@ -3,42 +3,25 @@
 require "isolation/abstract_unit"
 require "env_helpers"
 require "rails/command"
-require "rails/commands/secrets/secrets_command"
 
-class Rails::Command::SecretsCommandTest < ActiveSupport::TestCase
+class Rails::Command::SecretsTest < ActiveSupport::TestCase
   include ActiveSupport::Testing::Isolation, EnvHelpers
 
   setup :build_app
   teardown :teardown_app
 
   test "edit without editor gives hint" do
-    assert_match "No $EDITOR to open decrypted secrets in", run_edit_command(editor: "")
-  end
-
-  test "encrypted secrets are deprecated when using credentials" do
-    assert_match "Encrypted secrets is deprecated", run_setup_command
-    assert_equal 1, $?.exitstatus
-    assert_not File.exist?("config/secrets.yml.enc")
-  end
-
-  test "encrypted secrets are deprecated when running edit without setup" do
-    assert_match "Encrypted secrets is deprecated", run_setup_command
-    assert_equal 1, $?.exitstatus
-    assert_not File.exist?("config/secrets.yml.enc")
-  end
-
-  test "encrypted secrets are deprecated for 5.1 config/secrets.yml apps" do
-    Dir.chdir(app_path) do
-      FileUtils.rm("config/credentials.yml.enc")
-      FileUtils.touch("config/secrets.yml")
-
-      assert_match "Encrypted secrets is deprecated", run_setup_command
-      assert_equal 1, $?.exitstatus
-      assert_not File.exist?("config/secrets.yml.enc")
-    end
+    assert_match "No $EDITOR to open file in", run_edit_command(editor: "")
   end
 
   test "edit secrets" do
+    # Use expected default MessageEncryptor serializer for Rails < 7.1 to be compatible with hardcoded secrets.yml.enc
+    add_to_config <<-RUBY
+      config.active_support.message_serializer = :marshal
+    RUBY
+
+    require "#{app_path}/config/environment"
+
     prevent_deprecation
 
     # Run twice to ensure encrypted secrets can be reread after first edit pass.

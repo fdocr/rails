@@ -40,9 +40,21 @@ class CounterCacheTest < ActiveRecord::TestCase
     end
   end
 
+  test "increment counter by specific amount" do
+    assert_difference "@topic.reload.replies_count", +2 do
+      Topic.increment_counter(:replies_count, @topic.id, by: 2)
+    end
+  end
+
   test "decrement counter" do
     assert_difference "@topic.reload.replies_count", -1 do
       Topic.decrement_counter(:replies_count, @topic.id)
+    end
+  end
+
+  test "decrement counter by specific amount" do
+    assert_difference "@topic.reload.replies_count", -2 do
+      Topic.decrement_counter(:replies_count, @topic.id, by: 2)
     end
   end
 
@@ -111,6 +123,27 @@ class CounterCacheTest < ActiveRecord::TestCase
     end
     assert_difference "david.reload.trained_dogs_count", -1 do
       DogLover.reset_counters(david.id, :trained_dogs)
+    end
+  end
+
+  test "reset counter skips query for correct counter" do
+    Topic.reset_counters(@topic.id, :replies_count)
+
+    # SELECT "topics".* FROM "topics" WHERE "topics"."id" = ? LIMIT ?
+    # SELECT COUNT(*) FROM "topics" WHERE "topics"."type" IN (?, ?, ?, ?, ?) AND "topics"."parent_id" = ?
+    assert_queries(2) do
+      Topic.reset_counters(@topic.id, :replies_count)
+    end
+  end
+
+  test "reset counter performs query for correct counter with touch: true" do
+    Topic.reset_counters(@topic.id, :replies_count)
+
+    # SELECT "topics".* FROM "topics" WHERE "topics"."id" = ? LIMIT ?
+    # SELECT COUNT(*) FROM "topics" WHERE "topics"."type" IN (?, ?, ?, ?, ?) AND "topics"."parent_id" = ?
+    # UPDATE "topics" SET "updated_at" = ? WHERE "topics"."id" = ?
+    assert_queries(3) do
+      Topic.reset_counters(@topic.id, :replies_count, touch: true)
     end
   end
 

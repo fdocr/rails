@@ -21,8 +21,10 @@ nd
 ned
 noone
 objekt
+optin
 ot
 overthere
+propertie
 reenable
 rouge
 searchin
@@ -36,8 +38,10 @@ ue
 unqiue
 upto
 varius
+vershen
 vew
-vlaue
 wil
 wth
 yau
+nin
+elemen

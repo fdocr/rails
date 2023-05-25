@@ -2,6 +2,8 @@
 
 module ActiveRecord
   ###
+  # = Active Record \Result
+  #
   # This class encapsulates a result returned from calling
   # {#exec_query}[rdoc-ref:ConnectionAdapters::DatabaseStatements#exec_query]
   # on any database connection adapter. For example:
@@ -36,8 +38,12 @@ module ActiveRecord
 
     attr_reader :columns, :rows, :column_types
 
-    def self.empty # :nodoc:
-      EMPTY
+    def self.empty(async: false) # :nodoc:
+      if async
+        EMPTY_ASYNC
+      else
+        EMPTY
+      end
     end
 
     def initialize(columns, rows, column_types = {})
@@ -46,9 +52,6 @@ module ActiveRecord
       @hash_rows    = nil
       @column_types = column_types
     end
-
-    EMPTY = new([].freeze, [].freeze, {}.freeze)
-    private_constant :EMPTY
 
     # Returns true if this result set includes the column named +name+
     def includes_column?(name)
@@ -134,6 +137,11 @@ module ActiveRecord
       @hash_rows    = nil
     end
 
+    def freeze # :nodoc:
+      hash_rows.freeze
+      super
+    end
+
     private
       def column_type(name, type_overrides = {})
         type_overrides.fetch(name) do
@@ -181,5 +189,11 @@ module ActiveRecord
             }
           end
       end
+
+      EMPTY = new([].freeze, [].freeze, {}.freeze).freeze
+      private_constant :EMPTY
+
+      EMPTY_ASYNC = FutureResult::Complete.new(EMPTY).freeze
+      private_constant :EMPTY_ASYNC
   end
 end

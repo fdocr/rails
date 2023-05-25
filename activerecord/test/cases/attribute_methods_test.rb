@@ -20,14 +20,14 @@ class AttributeMethodsTest < ActiveRecord::TestCase
   fixtures :topics, :developers, :companies, :computers
 
   def setup
-    @old_matchers = ActiveRecord::Base.send(:attribute_method_matchers).dup
+    @old_matchers = ActiveRecord::Base.send(:attribute_method_patterns).dup
     @target = Class.new(ActiveRecord::Base)
     @target.table_name = "topics"
   end
 
   teardown do
-    ActiveRecord::Base.send(:attribute_method_matchers).clear
-    ActiveRecord::Base.send(:attribute_method_matchers).concat(@old_matchers)
+    ActiveRecord::Base.send(:attribute_method_patterns).clear
+    ActiveRecord::Base.send(:attribute_method_patterns).concat(@old_matchers)
   end
 
   test "attribute_for_inspect with a string" do
@@ -41,14 +41,13 @@ class AttributeMethodsTest < ActiveRecord::TestCase
   test "attribute_for_inspect with a date" do
     t = topics(:first)
 
-    assert_equal %("#{t.written_on.to_formatted_s(:inspect)}"), t.attribute_for_inspect(:written_on)
+    assert_equal %("#{t.written_on.to_fs(:inspect)}"), t.attribute_for_inspect(:written_on)
   end
 
   test "attribute_for_inspect with an array" do
     t = topics(:first)
-    t.content = [Object.new]
-
-    assert_match %r(\[#<Object:0x[0-9a-f]+>\]), t.attribute_for_inspect(:content)
+    t.content = ["some_value"]
+    assert_match %r(\["some_value"\]), t.attribute_for_inspect(:content)
   end
 
   test "attribute_for_inspect with a long array" do
@@ -194,7 +193,7 @@ class AttributeMethodsTest < ActiveRecord::TestCase
     assert_equal category_attrs, category.attributes_before_type_cast
   end
 
-  if current_adapter?(:Mysql2Adapter)
+  if current_adapter?(:Mysql2Adapter, :TrilogyAdapter)
     test "read attributes_before_type_cast on a boolean" do
       bool = Boolean.create!("value" => false)
       assert_equal 0, bool.reload.attributes_before_type_cast["value"]
@@ -216,18 +215,25 @@ class AttributeMethodsTest < ActiveRecord::TestCase
     end
   end
 
-  test "read attributes_for_database" do
-    topic = Topic.new
-    topic.content = { one: 1, two: 2 }
-
-    db_attributes = Topic.instantiate(topic.attributes_for_database).attributes
-    before_type_cast_attributes = Topic.instantiate(topic.attributes_before_type_cast).attributes
-
-    assert_equal topic.attributes, db_attributes
-    assert_not_equal topic.attributes, before_type_cast_attributes
+  test "read_attribute_for_database" do
+    topic = Topic.new(content: ["ok"])
+    assert_equal "---\n- ok\n", topic.read_attribute_for_database("content")
   end
 
-  test "read attributes_after_type_cast on a date" do
+  test "read_attribute_for_database with aliased attribute" do
+    topic = Topic.new(title: "Hello")
+    assert_equal "Hello", topic.read_attribute_for_database(:heading)
+  end
+
+  test "attributes_for_database" do
+    topic = Topic.new
+    topic.content = { "one" => 1, "two" => 2 }
+
+    db_attributes = Topic.instantiate(topic.attributes_for_database).attributes
+    assert_equal topic.attributes, db_attributes
+  end
+
+  test "read attributes after type cast on a date" do
     tz = "Pacific Time (US & Canada)"
 
     in_time_zone tz do
@@ -291,16 +297,16 @@ class AttributeMethodsTest < ActiveRecord::TestCase
   end
 
   test "hashes are not mangled" do
-    new_topic = { title: "New Topic", content: { key: "First value" } }
-    new_topic_values = { title: "AnotherTopic", content: { key: "Second value" } }
+    new_topic = { "title" => "New Topic", "content" => { "key" => "First value" } }
+    new_topic_values = { "title" => "AnotherTopic", "content" => { "key" => "Second value" } }
 
     topic = Topic.new(new_topic)
-    assert_equal new_topic[:title], topic.title
-    assert_equal new_topic[:content], topic.content
+    assert_equal new_topic["title"], topic.title
+    assert_equal new_topic["content"], topic.content
 
     topic.attributes = new_topic_values
-    assert_equal new_topic_values[:title], topic.title
-    assert_equal new_topic_values[:content], topic.content
+    assert_equal new_topic_values["title"], topic.title
+    assert_equal new_topic_values["content"], topic.content
   end
 
   test "create through factory" do
@@ -335,6 +341,12 @@ class AttributeMethodsTest < ActiveRecord::TestCase
     topic = Topic.first
     assert_raises(ActiveModel::MissingAttributeError) { topic.update_columns(no_column_exists: "Hello!") }
     assert_raises(ActiveModel::UnknownAttributeError) { topic.update(no_column_exists: "Hello!") }
+    assert_raises(ActiveModel::MissingAttributeError) { topic[:no_column_exists] = "Hello!" }
+  end
+
+  test "write_attribute does not raise when the attribute isn't selected" do
+    topic = Topic.select(:id).first
+    assert_nothing_raised { topic[:title] = "Hello!" }
   end
 
   test "write_attribute allows writing to aliased attributes" do
@@ -363,12 +375,13 @@ class AttributeMethodsTest < ActiveRecord::TestCase
     assert_equal "Don't change the topic", topic[:heading]
   end
 
-  test "read_attribute raises ActiveModel::MissingAttributeError when the attribute does not exist" do
-    computer = Computer.select("id").first
-    assert_raises(ActiveModel::MissingAttributeError) { computer[:developer] }
-    assert_raises(ActiveModel::MissingAttributeError) { computer[:extendedWarranty] }
-    assert_raises(ActiveModel::MissingAttributeError) { computer[:no_column_exists] = "Hello!" }
-    assert_nothing_raised { computer[:developer] = "Hello!" }
+  test "read_attribute raises ActiveModel::MissingAttributeError when the attribute isn't selected" do
+    computer = Computer.select(:id, :extendedWarranty).first
+    assert_raises(ActiveModel::MissingAttributeError, match: /attribute 'developer' for Computer/) do
+      computer[:developer]
+    end
+    assert_nothing_raised { computer[:extendedWarranty] }
+    assert_nothing_raised { computer[:no_column_exists] }
   end
 
   test "read_attribute when false" do
@@ -531,7 +544,7 @@ class AttributeMethodsTest < ActiveRecord::TestCase
     assert_predicate topic, :user_defined_time?
   end
 
-  test "user-defined json attribute predicate" do
+  test "user-defined JSON attribute predicate" do
     klass = Class.new(ActiveRecord::Base) do
       self.table_name = Topic.table_name
 
@@ -624,7 +637,7 @@ class AttributeMethodsTest < ActiveRecord::TestCase
   end
 
   test "should unserialize attributes for frozen records" do
-    myobj = { value1: :value2 }
+    myobj = { "value1" => "value2" }
     topic = Topic.create(content: myobj)
     topic.freeze
     assert_equal myobj, topic.content
@@ -652,8 +665,8 @@ class AttributeMethodsTest < ActiveRecord::TestCase
     assert_predicate topic, :is_test?
   end
 
-  test "raises ActiveRecord::DangerousAttributeError when defining an AR method in a model" do
-    %w(save create_or_update).each do |method|
+  test "raises ActiveRecord::DangerousAttributeError when defining an AR method or dangerous Object method in a model" do
+    %w(save create_or_update hash dup frozen?).each do |method|
       klass = Class.new(ActiveRecord::Base)
       klass.class_eval "def #{method}() 'defined #{method}' end"
       assert_raise ActiveRecord::DangerousAttributeError do

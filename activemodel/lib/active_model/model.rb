@@ -1,10 +1,10 @@
 # frozen_string_literal: true
 
 module ActiveModel
-  # == Active \Model \Basic \Model
+  # = Active \Model \Basic \Model
   #
-  # Allows implementing models similar to <tt>ActiveRecord::Base</tt>.
-  # Includes <tt>ActiveModel::API</tt> for the required interface for an
+  # Allows implementing models similar to ActiveRecord::Base.
+  # Includes ActiveModel::API for the required interface for an
   # object to interact with Action Pack and Action View, but can be
   # extended with other functionalities.
   #
@@ -37,10 +37,32 @@ module ActiveModel
   #   person.omg # => true
   #
   # For more detailed information on other functionalities available, please
-  # refer to the specific modules included in <tt>ActiveModel::Model</tt>
+  # refer to the specific modules included in +ActiveModel::Model+
   # (see below).
   module Model
     extend ActiveSupport::Concern
     include ActiveModel::API
+    include ActiveModel::Access
+
+    ##
+    # :method: slice
+    #
+    # :call-seq: slice(*methods)
+    #
+    # Returns a hash of the given methods with their names as keys and returned
+    # values as values.
+    #
+    #--
+    # Implemented by ActiveModel::Access#slice.
+
+    ##
+    # :method: values_at
+    #
+    # :call-seq: values_at(*methods)
+    #
+    # Returns an array of the values returned by the given methods.
+    #
+    #--
+    # Implemented by ActiveModel::Access#values_at.
   end
 end

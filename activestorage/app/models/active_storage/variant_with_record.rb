@@ -1,7 +1,9 @@
 # frozen_string_literal: true
 
+# = Active Storage \Variant With Record
+#
 # Like an ActiveStorage::Variant, but keeps detail about the variant in the database as an
-# ActiveStorage::VariantRecord. This is only used if `ActiveStorage.track_variants` is enabled.
+# ActiveStorage::VariantRecord. This is only used if +ActiveStorage.track_variants+ is enabled.
 class ActiveStorage::VariantWithRecord
   attr_reader :blob, :variation
   delegate :service, to: :blob
@@ -25,6 +27,11 @@ class ActiveStorage::VariantWithRecord
 
   def image
     record&.image
+  end
+
+  # Destroys record and deletes file from service.
+  def destroy
+    record&.destroy
   end
 
   delegate :key, :url, :download, to: :image, allow_nil: true

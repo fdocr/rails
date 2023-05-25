@@ -15,11 +15,14 @@ module ActiveRecord
   class FixtureClassNotFound < ActiveRecord::ActiveRecordError # :nodoc:
   end
 
+  # = Active Record \Fixtures
+  #
   # \Fixtures are a way of organizing data that you want to test against; in short, sample data.
   #
-  # They are stored in YAML files, one file per model, which are placed in the directory
-  # appointed by <tt>ActiveSupport::TestCase.fixture_path=(path)</tt> (this is automatically
-  # configured for Rails, so you can just put your files in <tt><your-rails-app>/test/fixtures/</tt>).
+  # They are stored in YAML files, one file per model, which are placed in the directories
+  # appointed by <tt>ActiveSupport::TestCase.fixture_paths=(path)</tt> (this is automatically
+  # configured for Rails, so you can just put your files in <tt><your-rails-app>/test/fixtures/</tt>,
+  # or in the <tt>test/fixtures</tt> folder under any of your application's engines).
   # The fixture file ends with the +.yml+ file extension, for example:
   # <tt><your-rails-app>/test/fixtures/web_sites.yml</tt>).
   #
@@ -241,13 +244,13 @@ module ActiveRecord
   # The generated ID for a given label is constant, so we can discover
   # any fixture's ID without loading anything, as long as we know the label.
   #
-  # == Label references for associations (belongs_to, has_one, has_many)
+  # == Label references for associations (+belongs_to+, +has_one+, +has_many+)
   #
   # Specifying foreign keys in fixtures can be very fragile, not to
   # mention difficult to read. Since Active Record can figure out the ID of
   # any fixture from its label, you can specify FK's by label instead of ID.
   #
-  # === belongs_to
+  # === +belongs_to+
   #
   # Let's break out some more monkeys and pirates.
   #
@@ -286,7 +289,7 @@ module ActiveRecord
   # a target *label* for the *association* (monkey: george) rather than
   # a target *id* for the *FK* (<tt>monkey_id: 1</tt>).
   #
-  # ==== Polymorphic belongs_to
+  # ==== Polymorphic +belongs_to+
   #
   # Supporting polymorphic relationships is a little bit more complicated, since
   # Active Record needs to know what type your association is pointing at. Something
@@ -311,7 +314,7 @@ module ActiveRecord
   #
   # Just provide the polymorphic target type and Active Record will take care of the rest.
   #
-  # === has_and_belongs_to_many or has_many :through
+  # === +has_and_belongs_to_many+ or <tt>has_many :through</tt>
   #
   # Time to give our monkey some fruit.
   #
@@ -400,6 +403,10 @@ module ActiveRecord
   #     monkey_id: <%= ActiveRecord::FixtureSet.identify(:reginald) %>
   #     pirate_id: <%= ActiveRecord::FixtureSet.identify(:george) %>
   #
+  # If the model uses UUID values for identifiers, add the +:uuid+ argument:
+  #
+  #   ActiveRecord::FixtureSet.identify(:boaty_mcboatface, :uuid)
+  #
   # == Support for YAML defaults
   #
   # You can set and reuse defaults in your fixtures YAML file.
@@ -407,7 +414,7 @@ module ActiveRecord
   # defaults:
   #
   #   DEFAULTS: &DEFAULTS
-  #     created_on: <%= 3.weeks.ago.to_formatted_s(:db) %>
+  #     created_on: <%= 3.weeks.ago.to_fs(:db) %>
   #
   #   first:
   #     name: Smurf
@@ -467,7 +474,7 @@ module ActiveRecord
 
     cattr_accessor :all_loaded_fixtures, default: {}
 
-    class ClassCache
+    class ClassCache # :nodoc:
       def initialize(class_names, config)
         @class_names = class_names.stringify_keys
         @config      = config
@@ -552,7 +559,7 @@ module ActiveRecord
         end
       end
 
-      def create_fixtures(fixtures_directory, fixture_set_names, class_names = {}, config = ActiveRecord::Base, &block)
+      def create_fixtures(fixtures_directories, fixture_set_names, class_names = {}, config = ActiveRecord::Base, &block)
         fixture_set_names = Array(fixture_set_names).map(&:to_s)
         class_names = ClassCache.new class_names, config
 
@@ -565,7 +572,7 @@ module ActiveRecord
 
         if fixture_files_to_read.any?
           fixtures_map = read_and_insert(
-            fixtures_directory,
+            Array(fixtures_directories),
             fixture_files_to_read,
             class_names,
             connection,
@@ -585,21 +592,34 @@ module ActiveRecord
         end
       end
 
+      # Returns a consistent, platform-independent hash representing a mapping
+      # between the label and the subcomponents of the provided composite key.
+      #
+      # Example:
+      # composite_identify("label", [:a, :b, :c]) => { a: hash_1, b: hash_2, c: hash_3 }
+      def composite_identify(label, key)
+        key
+          .index_with
+          .with_index { |sub_key, index| (identify(label) << index) % MAX_ID }
+          .with_indifferent_access
+      end
+
       # Superclass for the evaluation contexts used by ERB fixtures.
       def context_class
         @context_class ||= Class.new
       end
 
       private
-        def read_and_insert(fixtures_directory, fixture_files, class_names, connection) # :nodoc:
+        def read_and_insert(fixtures_directories, fixture_files, class_names, connection) # :nodoc:
           fixtures_map = {}
+          directory_glob = "{#{fixtures_directories.join(",")}}"
           fixture_sets = fixture_files.map do |fixture_set_name|
             klass = class_names[fixture_set_name]
             fixtures_map[fixture_set_name] = new( # ActiveRecord::FixtureSet.new
               nil,
               fixture_set_name,
               klass,
-              ::File.join(fixtures_directory, fixture_set_name)
+              ::File.join(directory_glob, fixture_set_name)
             )
           end
           update_all_loaded_fixtures(fixtures_map)
@@ -629,14 +649,22 @@ module ActiveRecord
 
             conn.insert_fixtures_set(table_rows_for_connection, table_rows_for_connection.keys)
 
-            if ActiveRecord.verify_foreign_keys_for_fixtures && !conn.all_foreign_keys_valid?
-              raise "Foreign key violations found in your fixture data. Ensure you aren't referring to labels that don't exist on associations."
-            end
+            check_all_foreign_keys_valid!(conn)
 
             # Cap primary key sequences to max(pk).
             if conn.respond_to?(:reset_pk_sequence!)
               set.each { |fs| conn.reset_pk_sequence!(fs.table_name) }
             end
+          end
+        end
+
+        def check_all_foreign_keys_valid!(conn)
+          return unless ActiveRecord.verify_foreign_keys_for_fixtures
+
+          begin
+            conn.check_all_foreign_keys_valid!
+          rescue ActiveRecord::StatementInvalid => e
+            raise "Foreign key violations found in your fixture data. Ensure you aren't referring to labels that don't exist on associations. Error from database:\n\n#{e.message}"
           end
         end
 
@@ -715,10 +743,13 @@ module ActiveRecord
       # Loads the fixtures from the YAML file at +path+.
       # If the file sets the +model_class+ and current instance value is not set,
       # it uses the file value.
+
       def read_fixture_files(path)
-        yaml_files = Dir["#{path}/{**,*}/*.yml"].select { |f|
+        yaml_files = Dir["#{path}{.yml,/{**,*}/*.yml}"].select { |f|
           ::File.file?(f)
-        } + [yaml_file_path(path)]
+        }
+
+        raise ArgumentError, "No fixture files found for #{@name}" if yaml_files.empty?
 
         yaml_files.each_with_object({}) do |file, fixtures|
           FixtureSet::File.open(file) do |fh|
@@ -729,10 +760,6 @@ module ActiveRecord
             end
           end
         end
-      end
-
-      def yaml_file_path(path)
-        "#{path}.yml"
       end
   end
 
@@ -769,7 +796,8 @@ module ActiveRecord
     def find
       raise FixtureClassNotFound, "No class attached to find." unless model_class
       object = model_class.unscoped do
-        model_class.find(fixture[model_class.primary_key])
+        pk_clauses = fixture.slice(*Array(model_class.primary_key))
+        model_class.find_by!(pk_clauses)
       end
       # Fixtures can't be eagerly loaded
       object.instance_variable_set(:@strict_loading, false)

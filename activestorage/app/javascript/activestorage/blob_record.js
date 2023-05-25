@@ -1,18 +1,15 @@
 import { getMetaValue } from "./helpers"
 
 export class BlobRecord {
-  constructor(file, checksum, url, directUploadToken, attachmentName) {
+  constructor(file, checksum, url, customHeaders = {}) {
     this.file = file
 
     this.attributes = {
       filename: file.name,
       content_type: file.type || "application/octet-stream",
       byte_size: file.size,
-      checksum: checksum,
+      checksum: checksum
     }
-
-    this.directUploadToken = directUploadToken
-    this.attachmentName = attachmentName
 
     this.xhr = new XMLHttpRequest
     this.xhr.open("POST", url, true)
@@ -20,6 +17,9 @@ export class BlobRecord {
     this.xhr.setRequestHeader("Content-Type", "application/json")
     this.xhr.setRequestHeader("Accept", "application/json")
     this.xhr.setRequestHeader("X-Requested-With", "XMLHttpRequest")
+    Object.keys(customHeaders).forEach((headerKey) => {
+      this.xhr.setRequestHeader(headerKey, customHeaders[headerKey])
+    })
 
     const csrfToken = getMetaValue("csrf-token")
     if (csrfToken != undefined) {
@@ -46,11 +46,7 @@ export class BlobRecord {
 
   create(callback) {
     this.callback = callback
-    this.xhr.send(JSON.stringify({
-      blob: this.attributes,
-      direct_upload_token: this.directUploadToken,
-      attachment_name: this.attachmentName
-    }))
+    this.xhr.send(JSON.stringify({ blob: this.attributes }))
   }
 
   requestDidLoad(event) {

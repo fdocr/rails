@@ -83,8 +83,41 @@ class DefaultStringsTest < ActiveRecord::TestCase
   end
 end
 
-if supports_text_column_with_default?
-  class DefaultTextTest < ActiveRecord::TestCase
+class DefaultBinaryTest < ActiveRecord::TestCase
+  if current_adapter?(:SQLite3Adapter, :PostgreSQLAdapter)
+    class DefaultBinary < ActiveRecord::Base; end
+
+    setup do
+      @connection = ActiveRecord::Base.connection
+      @connection.create_table :default_binaries do |t|
+        t.binary :varbinary_col, null: false, limit: 64, default: "varbinary_default"
+        t.binary :varbinary_col_hex_looking, null: false, limit: 64, default: "0xDEADBEEF"
+      end
+      DefaultBinary.reset_column_information
+    end
+
+    def test_default_varbinary_string
+      assert_equal "varbinary_default", DefaultBinary.new.varbinary_col
+    end
+
+    if current_adapter?(:Mysql2Adapter, :TrilogyAdapter) && !ActiveRecord::Base.connection.mariadb?
+      def test_default_binary_string
+        assert_equal "binary_default", DefaultBinary.new.binary_col
+      end
+    end
+
+    def test_default_varbinary_string_that_looks_like_hex
+      assert_equal "0xDEADBEEF", DefaultBinary.new.varbinary_col_hex_looking
+    end
+
+    teardown do
+      @connection.drop_table :default_binaries
+    end
+  end
+end
+
+class DefaultTextTest < ActiveRecord::TestCase
+  if supports_text_column_with_default?
     class DefaultText < ActiveRecord::Base; end
 
     setup do
@@ -110,27 +143,29 @@ if supports_text_column_with_default?
   end
 end
 
-if current_adapter?(:PostgreSQLAdapter)
-  class PostgresqlDefaultExpressionTest < ActiveRecord::TestCase
+class PostgresqlDefaultExpressionTest < ActiveRecord::TestCase
+  if current_adapter?(:PostgreSQLAdapter)
     include SchemaDumpingHelper
 
     test "schema dump includes default expression" do
       output = dump_table_schema("defaults")
       if ActiveRecord::Base.connection.database_version >= 100000
         assert_match %r/t\.date\s+"modified_date",\s+default: -> { "CURRENT_DATE" }/, output
-        assert_match %r/t\.datetime\s+"modified_time",\s+precision: 6,\s+default: -> { "CURRENT_TIMESTAMP" }/, output
+        assert_match %r/t\.datetime\s+"modified_time",\s+default: -> { "CURRENT_TIMESTAMP" }/, output
       else
         assert_match %r/t\.date\s+"modified_date",\s+default: -> { "\('now'::text\)::date" }/, output
-        assert_match %r/t\.datetime\s+"modified_time",\s+precision: 6,\s+default: -> { "now\(\)" }/, output
+        assert_match %r/t\.datetime\s+"modified_time",\s+default: -> { "now\(\)" }/, output
       end
       assert_match %r/t\.date\s+"modified_date_function",\s+default: -> { "now\(\)" }/, output
-      assert_match %r/t\.datetime\s+"modified_time_function",\s+precision: 6,\s+default: -> { "now\(\)" }/, output
+      assert_match %r/t\.datetime\s+"modified_time_function",\s+default: -> { "now\(\)" }/, output
+      assert_match %r/t\.datetime\s+"modified_time_without_precision",\s+precision: nil,\s+default: -> { "CURRENT_TIMESTAMP" }/, output
+      assert_match %r/t\.datetime\s+"modified_time_with_precision_0",\s+precision: 0,\s+default: -> { "CURRENT_TIMESTAMP" }/, output
     end
   end
 end
 
-if current_adapter?(:Mysql2Adapter)
-  class MysqlDefaultExpressionTest < ActiveRecord::TestCase
+class MysqlDefaultExpressionTest < ActiveRecord::TestCase
+  if current_adapter?(:Mysql2Adapter, :TrilogyAdapter)
     include SchemaDumpingHelper
 
     if supports_default_expression?
@@ -143,17 +178,17 @@ if current_adapter?(:Mysql2Adapter)
     if supports_datetime_with_precision?
       test "schema dump datetime includes default expression" do
         output = dump_table_schema("datetime_defaults")
-        assert_match %r/t\.datetime\s+"modified_datetime",\s+default: -> { "CURRENT_TIMESTAMP(?:\(\))?" }/i, output
+        assert_match %r/t\.datetime\s+"modified_datetime",\s+precision: nil,\s+default: -> { "CURRENT_TIMESTAMP(?:\(\))?" }/i, output
       end
 
       test "schema dump datetime includes precise default expression" do
         output = dump_table_schema("datetime_defaults")
-        assert_match %r/t\.datetime\s+"precise_datetime",.+default: -> { "CURRENT_TIMESTAMP\(6\)" }/i, output
+        assert_match %r/t\.datetime\s+"precise_datetime",\s+default: -> { "CURRENT_TIMESTAMP\(6\)" }/i, output
       end
 
       test "schema dump datetime includes precise default expression with on update" do
         output = dump_table_schema("datetime_defaults")
-        assert_match %r/t\.datetime\s+"updated_datetime",.+default: -> { "CURRENT_TIMESTAMP\(6\) ON UPDATE CURRENT_TIMESTAMP\(6\)" }/i, output
+        assert_match %r/t\.datetime\s+"updated_datetime",\s+default: -> { "CURRENT_TIMESTAMP\(6\) ON UPDATE CURRENT_TIMESTAMP\(6\)" }/i, output
       end
 
       test "schema dump timestamp includes default expression" do
@@ -177,21 +212,10 @@ if current_adapter?(:Mysql2Adapter)
       end
     end
   end
+end
 
-  if current_adapter?(:SQLite3Adapter)
-    class Sqlite3DefaultExpressionTest < ActiveRecord::TestCase
-      include SchemaDumpingHelper
-
-      test "schema dump includes default expression" do
-        output = dump_table_schema("defaults")
-        assert_match %r/t\.date\s+"modified_date",\s+default: -> { "CURRENT_DATE" }/, output
-        assert_match %r/t\.datetime\s+"modified_time",\s+precision: 6,\s+default: -> { "CURRENT_TIMESTAMP" }/, output
-        assert_match %r/t\.integer\s+"random_number",\s+default: -> { "random()" }/, output
-      end
-    end
-  end
-
-  class DefaultsTestWithoutTransactionalFixtures < ActiveRecord::TestCase
+class DefaultsTestWithoutTransactionalFixtures < ActiveRecord::TestCase
+  if current_adapter?(:Mysql2Adapter, :TrilogyAdapter)
     # ActiveRecord::Base#create! (and #save and other related methods) will
     # open a new transaction. When in transactional tests mode, this will
     # cause Active Record to create a new savepoint. However, since MySQL doesn't
@@ -203,13 +227,12 @@ if current_adapter?(:Mysql2Adapter)
     self.use_transactional_tests = false
 
     def using_strict(strict)
-      connection = ActiveRecord::Base.remove_connection
-      conn_hash = connection.configuration_hash
+      db_config = ActiveRecord::Base.connection_pool.db_config
+      conn_hash = db_config.configuration_hash
       ActiveRecord::Base.establish_connection conn_hash.merge(strict: strict)
       yield
     ensure
-      ActiveRecord::Base.remove_connection
-      ActiveRecord::Base.establish_connection connection
+      ActiveRecord::Base.establish_connection db_config
     end
 
     # Strict mode controls how MySQL handles invalid or missing values
@@ -272,6 +295,21 @@ if current_adapter?(:Mysql2Adapter)
       yield klass
     ensure
       klass.connection.drop_table(klass.table_name) rescue nil
+    end
+  end
+end
+
+class Sqlite3DefaultExpressionTest < ActiveRecord::TestCase
+  if current_adapter?(:SQLite3Adapter)
+    include SchemaDumpingHelper
+
+    test "schema dump includes default expression" do
+      output = dump_table_schema("defaults")
+      assert_match %r/t\.date\s+"modified_date",\s+default: -> { "CURRENT_DATE" }/, output
+      assert_match %r/t\.datetime\s+"modified_time",\s+default: -> { "CURRENT_TIMESTAMP" }/, output
+      assert_match %r/t\.datetime\s+"modified_time_without_precision",\s+precision: nil,\s+default: -> { "CURRENT_TIMESTAMP" }/, output
+      assert_match %r/t\.datetime\s+"modified_time_with_precision_0",\s+precision: 0,\s+default: -> { "CURRENT_TIMESTAMP" }/, output
+      assert_match %r/t\.integer\s+"random_number",\s+default: -> { "random\(\)" }/, output
     end
   end
 end

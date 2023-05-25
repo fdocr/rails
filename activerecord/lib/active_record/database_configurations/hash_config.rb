@@ -2,6 +2,8 @@
 
 module ActiveRecord
   class DatabaseConfigurations
+    # = Active Record Database Hash Config
+    #
     # A HashConfig object is created for each database configuration entry that
     # is created from a hash.
     #
@@ -72,6 +74,10 @@ module ActiveRecord
 
       def max_threads
         (configuration_hash[:max_threads] || pool).to_i
+      end
+
+      def query_cache
+        configuration_hash[:query_cache]
       end
 
       def max_queue
